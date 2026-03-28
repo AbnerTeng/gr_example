@@ -1,0 +1,58 @@
+paths:
+  msmarco_train: /mnt/storage/abner/data/msmarco/train.jsonl
+  msmarco_test: /mnt/storage/abner/data/msmarco/test.jsonl
+  doc_embeddings: /mnt/storage/abner/git/multi_docid/doc_embeddings.npy
+  data_dir: /mnt/storage/abner/git/t5_gr/data
+  pseudo_queries: /mnt/storage/abner/git/t5_gr/data/pseudo_queries.jsonl
+  semid_to_rqid: /mnt/storage/abner/git/t5_gr/data/semid_to_rqid.json
+  idx_to_rqid: /mnt/storage/abner/git/t5_gr/data/idx_to_rqid.json
+  train_data: /mnt/storage/abner/git/t5_gr/data/train.jsonl
+  test_data: /mnt/storage/abner/git/t5_gr/data/test.jsonl
+
+rq:
+  n_levels: 4
+  n_codes: 256
+
+assign_rq_docids:
+  n_iter: 20
+  seed: 42
+
+gen_pseudo_queries:
+  model: doc2query/msmarco-t5-base-v1
+  n_queries: 5
+  batch_size: 64
+  max_doc_len: 256
+  max_query_len: 64
+  device: cuda
+
+prep_data:
+  seed: 42
+
+base_model: google-t5/t5-large
+out_dir: /mnt/storage/abner/git/t5_gr/checkpoints/t5-large-gr
+
+data:
+  max_in_len: 512
+  max_out_len: 128
+
+training:
+  batch_size: 32
+  grad_accum: 2
+  epochs: 10
+  lr: 3e-4
+  lr_scheduler_type: cosine
+  warmup: 0.10
+  eval_steps: 2000
+  save_steps: 2000
+  eval_beams: 10
+  weight_decay: 0.01
+  max_grad_norm: 0.5
+  eval_strategy: steps
+  save_strategy: steps
+  report_to: wandb
+  logging_steps: 100
+  save_total_limit: 3
+
+wandb:
+  project: t5-gr-msmarco
+  run_name: t5-large-rq-docttttquery

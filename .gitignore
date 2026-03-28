@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data — large files, generated artifacts
+data/
+!data/.gitkeep
+
+# Checkpoints
+checkpoints/
+
+# Hydra outputs
+outputs/
+
+# WandB
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.npy
+*.log
+.env
