@@ -27,6 +27,9 @@ wandb/
 .vscode/
 .idea/
 
+# Claude
+.claude/
+
 # Misc
 *.npy
 *.log
