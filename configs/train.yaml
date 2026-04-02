@@ -1,13 +1,17 @@
 paths:
   msmarco_train: /mnt/storage/abner/data/msmarco/train.jsonl
   msmarco_test: /mnt/storage/abner/data/msmarco/test.jsonl
-  doc_embeddings: /mnt/storage/abner/git/multi_docid/doc_embeddings.npy
+  doc_embeddings: /mnt/storage/abner/git/t5_gr/doc_embeddings.npy
   data_dir: /mnt/storage/abner/git/t5_gr/data
   pseudo_queries: /mnt/storage/abner/git/t5_gr/data/pseudo_queries.jsonl
   semid_to_rqid: /mnt/storage/abner/git/t5_gr/data/semid_to_rqid.json
   idx_to_rqid: /mnt/storage/abner/git/t5_gr/data/idx_to_rqid.json
   train_data: /mnt/storage/abner/git/t5_gr/data/train.jsonl
   test_data: /mnt/storage/abner/git/t5_gr/data/test.jsonl
+
+emb:
+  model_name: Qwen/Qwen3-Embedding-0.6B
+  batch_size: 128
 
 rq:
   n_levels: 4
