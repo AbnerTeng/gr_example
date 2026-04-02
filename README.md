@@ -27,7 +27,7 @@ Below is the detail of data preparation and preprocessing
 ### Assign RQ docids
 
 - We assign unique docid to each document with Residual Quantization (RQ) codebooks. 
-- We first utilize a light weight embedding model (Qwen3-0.6B-Embedding) to generate document embeddings. (This part of code is not provided)
+- We first utilize a light weight embedding model (Qwen3-0.6B-Embedding) to generate document embeddings (The code is in `src/generate_embedding.py`).
 
 ### Generate pseudo queries
 
@@ -44,3 +44,9 @@ bash script/train.sh
 ```
 
 All model and traning configurations are stored in `configs/train.yaml`
+
+## Evaluation performance
+
+| Model/Metrics | Hits@1 | Hits@5 | Hits@10 |
+|---------------|--------|--------|---------|
+| T5-Large      | 0.2544 | 0.4553 | 0.5089  |
