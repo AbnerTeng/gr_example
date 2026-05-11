@@ -9,7 +9,7 @@ from omegaconf import DictConfig
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 
-from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+from src.msmarco_utils import load_docs_and_queries_by_split
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -56,14 +56,22 @@ def encode(
 def main(cfg: DictConfig) -> None:
     os.makedirs(cfg.paths.data_dir, exist_ok=True)
 
-    print("Loading MSMARCO data...")
-    raw = load_jsonl(cfg.paths.msmarco_train)
-    docs, queries, data_format = extract_docs_and_queries(raw)
-    print(f"Detected MSMARCO format: {data_format}")
-    print(f"Docs: {len(docs)}, Queries: {len(queries)}")
+    split_files = [
+        ("train", cfg.paths.msmarco_train),
+        ("valid", cfg.paths.msmarco_valid),
+        ("test", cfg.paths.msmarco_test),
+    ]
+    print("Loading MSMARCO data (train + valid + test docs)...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
+    print(f"Merged docs: {len(docs)}")
     if not docs:
         raise ValueError(
-            "No documents found in msmarco_train. Check dataset file path and format."
+            "No documents found in MSMARCO splits. Check dataset file paths and format."
         )
 
     doc_texts = [d["text"] for d in docs]  # use full passage text

@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 
 JsonDict = Dict[str, Any]
@@ -85,3 +85,31 @@ def extract_docs_and_queries(
         return list(docs.values()), queries, fmt
 
     return [], [], fmt
+
+
+def load_docs_and_queries_by_split(
+    split_files: Sequence[Tuple[str, str]],
+) -> Tuple[List[JsonDict], Dict[str, List[JsonDict]], Dict[str, str]]:
+    """
+    Load multiple MSMARCO split files and merge docs by doc_id in split order.
+
+    Returns:
+      - merged_docs: unique docs across all splits
+      - queries_by_split: per-split extracted queries
+      - format_by_split: detected format per split
+    """
+    merged_docs: Dict[str, JsonDict] = {}
+    queries_by_split: Dict[str, List[JsonDict]] = {}
+    format_by_split: Dict[str, str] = {}
+
+    for split_name, path in split_files:
+        raw = load_jsonl(path)
+        docs, queries, fmt = extract_docs_and_queries(raw)
+        queries_by_split[split_name] = queries
+        format_by_split[split_name] = fmt
+        for d in docs:
+            doc_id = d.get("doc_id")
+            if isinstance(doc_id, str) and doc_id not in merged_docs:
+                merged_docs[doc_id] = d
+
+    return list(merged_docs.values()), queries_by_split, format_by_split

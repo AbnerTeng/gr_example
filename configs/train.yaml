@@ -1,6 +1,7 @@
 paths:
   root_dir: ${hydra:runtime.cwd}
   msmarco_train: ${paths.root_dir}/data/msmarco/train.jsonl
+  msmarco_valid: ${paths.root_dir}/data/msmarco/valid.jsonl
   msmarco_test: ${paths.root_dir}/data/msmarco/test.jsonl
   doc_embeddings: ${paths.root_dir}/data/doc_embeddings.npy
   data_dir: ${paths.root_dir}/data

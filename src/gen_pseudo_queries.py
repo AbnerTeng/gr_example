@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 
-from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+from src.msmarco_utils import load_docs_and_queries_by_split
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
@@ -20,13 +20,18 @@ def main(cfg: DictConfig) -> None:
     ).to(gpq.device)
     model.eval()
 
-    print("Loading MSMARCO docs...")
-    raw = load_jsonl(p.msmarco_train)
-    docs, _, data_format = extract_docs_and_queries(raw)
-    print(f"Detected MSMARCO format: {data_format}")
+    split_files = [
+        ("train", p.msmarco_train),
+        ("valid", p.msmarco_valid),
+        ("test", p.msmarco_test),
+    ]
+    print("Loading MSMARCO docs (train + valid + test)...")
+    docs, _, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(f"  {split_name}: format={format_by_split[split_name]}")
     if not docs:
         raise ValueError(
-            "No documents found in msmarco_train. Check dataset file path and format."
+            "No documents found in MSMARCO splits. Check dataset file paths and format."
         )
     print(f"  {len(docs)} docs")
 

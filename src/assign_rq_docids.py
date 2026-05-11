@@ -5,7 +5,7 @@ import hydra
 import numpy as np
 from omegaconf import DictConfig
 
-from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+from src.msmarco_utils import load_docs_and_queries_by_split
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
@@ -16,10 +16,18 @@ def main(cfg: DictConfig) -> None:
     doc_embs = np.load(p.doc_embeddings).astype(np.float32)  # (N, D), L2-normalized
     print(f"  shape: {doc_embs.shape}")
 
-    print("Loading doc semids...")
-    raw = load_jsonl(p.msmarco_train)
-    docs, _, data_format = extract_docs_and_queries(raw)
-    print(f"Detected MSMARCO format: {data_format}")
+    split_files = [
+        ("train", p.msmarco_train),
+        ("valid", p.msmarco_valid),
+        ("test", p.msmarco_test),
+    ]
+    print("Loading doc semids from MSMARCO (train + valid + test docs)...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
     doc_semids = [d["doc_id"] for d in docs]
     assert len(doc_semids) == doc_embs.shape[0], "Count mismatch!"
 

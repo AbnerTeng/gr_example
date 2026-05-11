@@ -4,7 +4,7 @@ import random
 import hydra
 from omegaconf import DictConfig
 
-from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+from src.msmarco_utils import load_docs_and_queries_by_split
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
@@ -16,10 +16,25 @@ def main(cfg: DictConfig) -> None:
     with open(p.semid_to_rqid) as f:
         semid_to_rqid = json.load(f)
 
-    print("Loading MSMARCO train data...")
-    raw = load_jsonl(p.msmarco_train)
-    docs, train_queries, train_format = extract_docs_and_queries(raw)
-    print(f"Detected MSMARCO train format: {train_format}")
+    split_files = [
+        ("train", p.msmarco_train),
+        ("valid", p.msmarco_valid),
+        ("test", p.msmarco_test),
+    ]
+    print("Loading MSMARCO splits...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
+
+    train_queries = queries_by_split["train"] + queries_by_split["valid"]
+    test_queries = queries_by_split["test"]
+    print(
+        f"Using train queries from train+valid: {len(train_queries)}, "
+        f"test queries from test: {len(test_queries)}"
+    )
 
     samples, skipped = [], 0
 
@@ -68,9 +83,6 @@ def main(cfg: DictConfig) -> None:
     print(f"Saved train → {p.train_data}")
 
     print("Building test set...")
-    test_raw = load_jsonl(p.msmarco_test)
-    _, test_queries, test_format = extract_docs_and_queries(test_raw)
-    print(f"Detected MSMARCO test format: {test_format}")
 
     test_samples = []
     for d in test_queries:
