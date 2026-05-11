@@ -1,4 +1,5 @@
 import glob
+import inspect
 import json
 import logging
 import os
@@ -44,8 +45,13 @@ class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
 
     @torch.no_grad()
     def evaluate(
-        self, eval_dataset: Optional[GRDataset] = None, metric_key_prefix: str = "eval"
+        self,
+        eval_dataset: Optional[GRDataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+        **kwargs,
     ) -> Dict[str, float]:
+        del ignore_keys, kwargs  # compatibility with newer Trainer.evaluate() kwargs
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
         dataloader = self.get_eval_dataloader(eval_dataset)
 
@@ -186,12 +192,20 @@ def main(cfg: DictConfig) -> None:
 
     wandb.init(project=cfg.wandb.project, name=cfg.wandb.run_name)
 
+    # transformers>=5 renamed Trainer's tokenizer arg to processing_class.
+    trainer_init_params = inspect.signature(Seq2SeqTrainer.__init__).parameters
+    trainer_processing_kwargs = (
+        {"processing_class": tokenizer}
+        if "processing_class" in trainer_init_params
+        else {"tokenizer": tokenizer}
+    )
+
     trainer = ConstrainedSeq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=test_ds,
-        tokenizer=tokenizer,
+        **trainer_processing_kwargs,
         data_collator=collator,
         trie_root=trie_root,
         gt_rqids=gt_rqids,

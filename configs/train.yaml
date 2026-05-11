@@ -1,13 +1,14 @@
 paths:
-  msmarco_train: /mnt/storage/abner/data/msmarco/train.jsonl
-  msmarco_test: /mnt/storage/abner/data/msmarco/test.jsonl
-  doc_embeddings: /mnt/storage/abner/git/t5_gr/doc_embeddings.npy
-  data_dir: /mnt/storage/abner/git/t5_gr/data
-  pseudo_queries: /mnt/storage/abner/git/t5_gr/data/pseudo_queries.jsonl
-  semid_to_rqid: /mnt/storage/abner/git/t5_gr/data/semid_to_rqid.json
-  idx_to_rqid: /mnt/storage/abner/git/t5_gr/data/idx_to_rqid.json
-  train_data: /mnt/storage/abner/git/t5_gr/data/train.jsonl
-  test_data: /mnt/storage/abner/git/t5_gr/data/test.jsonl
+  root_dir: ${hydra:runtime.cwd}
+  msmarco_train: ${paths.root_dir}/data/msmarco/train.jsonl
+  msmarco_test: ${paths.root_dir}/data/msmarco/test.jsonl
+  doc_embeddings: ${paths.root_dir}/data/doc_embeddings.npy
+  data_dir: ${paths.root_dir}/data
+  pseudo_queries: ${paths.data_dir}/pseudo_queries.jsonl
+  semid_to_rqid: ${paths.data_dir}/semid_to_rqid.json
+  idx_to_rqid: ${paths.data_dir}/idx_to_rqid.json
+  train_data: ${paths.data_dir}/train.jsonl
+  test_data: ${paths.data_dir}/test.jsonl
 
 emb:
   model_name: Qwen/Qwen3-Embedding-0.6B
@@ -33,15 +34,15 @@ prep_data:
   seed: 42
 
 base_model: google-t5/t5-large
-out_dir: /mnt/storage/abner/git/t5_gr/checkpoints/t5-large-gr
+out_dir: ${paths.root_dir}/checkpoints/t5-large-gr
 
 data:
   max_in_len: 512
   max_out_len: 128
 
 training:
-  batch_size: 32
-  grad_accum: 2
+  batch_size: 8
+  grad_accum: 8
   epochs: 10
   lr: 3e-4
   lr_scheduler_type: cosine

@@ -5,6 +5,8 @@ import hydra
 import numpy as np
 from omegaconf import DictConfig
 
+from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
 def main(cfg: DictConfig) -> None:
@@ -15,10 +17,10 @@ def main(cfg: DictConfig) -> None:
     print(f"  shape: {doc_embs.shape}")
 
     print("Loading doc semids...")
-    with open(p.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
-
-    doc_semids = [d["doc_id"] for d in raw if d.get("operation") == "indexing"]
+    raw = load_jsonl(p.msmarco_train)
+    docs, _, data_format = extract_docs_and_queries(raw)
+    print(f"Detected MSMARCO format: {data_format}")
+    doc_semids = [d["doc_id"] for d in docs]
     assert len(doc_semids) == doc_embs.shape[0], "Count mismatch!"
 
     print(f"Running {rq.n_levels}-level RQ (n_codes={rq.n_codes}) with FAISS KMeans...")

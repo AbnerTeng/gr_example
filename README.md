@@ -40,7 +40,7 @@ We adopt T5-Large as the base GR model, which aligns with most GR research.
 Execute the below script to start training the model
 
 ```bash
-bash script/train.sh
+bash scripts/train.sh
 ```
 
 All model and traning configurations are stored in `configs/train.yaml`

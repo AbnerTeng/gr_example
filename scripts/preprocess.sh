@@ -1,6 +1,10 @@
 #!/bin/bash
 
-source .venv/bin/activate
+set -euo pipefail
+
+if [ -d ".venv" ]; then
+  source .venv/bin/activate
+fi
 
 echo "Generate Document Embeddings"
 
@@ -16,5 +20,4 @@ python -m src.gen_pseudo_queries
 
 echo "Preprocess data"
 
-python -m src.prepare_data
-
+python -m src.prep_data

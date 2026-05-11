@@ -4,6 +4,8 @@ import random
 import hydra
 from omegaconf import DictConfig
 
+from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
 def main(cfg: DictConfig) -> None:
@@ -15,15 +17,14 @@ def main(cfg: DictConfig) -> None:
         semid_to_rqid = json.load(f)
 
     print("Loading MSMARCO train data...")
-    with open(p.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
+    raw = load_jsonl(p.msmarco_train)
+    docs, train_queries, train_format = extract_docs_and_queries(raw)
+    print(f"Detected MSMARCO train format: {train_format}")
 
     samples, skipped = [], 0
 
     # query -> rqdocid
-    for d in raw:
-        if d.get("operation") != "query":
-            continue
+    for d in train_queries:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             skipped += 1
@@ -33,9 +34,7 @@ def main(cfg: DictConfig) -> None:
 
     # document text -> rqdocid
     n_docs = 0
-    for d in raw:
-        if d.get("operation") != "indexing":
-            continue
+    for d in docs:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             continue
@@ -69,13 +68,12 @@ def main(cfg: DictConfig) -> None:
     print(f"Saved train → {p.train_data}")
 
     print("Building test set...")
-    with open(p.msmarco_test) as f:
-        test_raw = [json.loads(line) for line in f]
+    test_raw = load_jsonl(p.msmarco_test)
+    _, test_queries, test_format = extract_docs_and_queries(test_raw)
+    print(f"Detected MSMARCO test format: {test_format}")
 
     test_samples = []
-    for d in test_raw:
-        if d.get("operation") != "query":
-            continue
+    for d in test_queries:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             continue

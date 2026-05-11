@@ -1,5 +1,4 @@
 import os
-import json
 from typing import List
 
 import hydra
@@ -9,6 +8,8 @@ import torch.nn.functional as F
 from omegaconf import DictConfig
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
+
+from src.msmarco_utils import extract_docs_and_queries, load_jsonl
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -56,15 +57,16 @@ def main(cfg: DictConfig) -> None:
     os.makedirs(cfg.paths.data_dir, exist_ok=True)
 
     print("Loading MSMARCO data...")
-    with open(cfg.paths.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
-
-    docs = {d["doc_id"]: d for d in raw if d.get("operation") == "indexing"}
-    queries = [d for d in raw if d.get("operation") == "query"]
+    raw = load_jsonl(cfg.paths.msmarco_train)
+    docs, queries, data_format = extract_docs_and_queries(raw)
+    print(f"Detected MSMARCO format: {data_format}")
     print(f"Docs: {len(docs)}, Queries: {len(queries)}")
+    if not docs:
+        raise ValueError(
+            "No documents found in msmarco_train. Check dataset file path and format."
+        )
 
-    doc_list = list(docs.values())
-    doc_texts = [d["text"] for d in doc_list]  # use full passage text
+    doc_texts = [d["text"] for d in docs]  # use full passage text
 
     print(f"Loading {cfg.emb.model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(cfg.emb.model_name, trust_remote_code=True)
@@ -76,6 +78,16 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(cfg.paths.doc_embeddings):
         print("Loading cached doc embeddings...")
         doc_embs = np.load(cfg.paths.doc_embeddings)
+        if doc_embs.shape[0] != len(doc_texts):
+            print(
+                "Cached embeddings size mismatch "
+                f"(cache={doc_embs.shape[0]}, docs={len(doc_texts)}), regenerating..."
+            )
+            doc_embs = encode(doc_texts, tokenizer, model, batch_size=cfg.emb.batch_size)
+            np.save(cfg.paths.doc_embeddings, doc_embs)
+            print(
+                f"Saved embeddings to {cfg.paths.doc_embeddings}, shape: {doc_embs.shape}"
+            )
     else:
         print("Encoding documents...")
         doc_embs = encode(doc_texts, tokenizer, model, batch_size=cfg.emb.batch_size)

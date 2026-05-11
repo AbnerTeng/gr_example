@@ -6,6 +6,8 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 
+from src.msmarco_utils import extract_docs_and_queries, load_jsonl
+
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
 def main(cfg: DictConfig) -> None:
@@ -19,9 +21,13 @@ def main(cfg: DictConfig) -> None:
     model.eval()
 
     print("Loading MSMARCO docs...")
-    with open(p.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
-    docs = [d for d in raw if d.get("operation") == "indexing"]
+    raw = load_jsonl(p.msmarco_train)
+    docs, _, data_format = extract_docs_and_queries(raw)
+    print(f"Detected MSMARCO format: {data_format}")
+    if not docs:
+        raise ValueError(
+            "No documents found in msmarco_train. Check dataset file path and format."
+        )
     print(f"  {len(docs)} docs")
 
     with open(p.pseudo_queries, "w") as out_f:
