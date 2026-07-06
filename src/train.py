@@ -6,9 +6,12 @@ import os
 import re
 from typing import Dict, List, Optional
 
+# Required by accelerate/NCCL on RTX 4000 series GPUs.
+os.environ.setdefault("NCCL_P2P_DISABLE", "1")
+os.environ.setdefault("NCCL_IB_DISABLE", "1")
+
 import hydra
 import torch
-import wandb
 from omegaconf import DictConfig
 from transformers import (
     AutoTokenizer,
@@ -23,6 +26,12 @@ from .dataset import GRDataset
 from .inference import build_rq_trie, RQTrieLogitsProcessor, TrieNode
 
 log = logging.getLogger(__name__)
+
+
+def _report_to_wandb(report_to) -> bool:
+    if isinstance(report_to, str):
+        return report_to.lower() == "wandb"
+    return "wandb" in report_to
 
 
 class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
@@ -190,7 +199,25 @@ def main(cfg: DictConfig) -> None:
         dataloader_num_workers=4,
     )
 
-    wandb.init(project=cfg.wandb.project, name=cfg.wandb.run_name)
+    if _report_to_wandb(t.report_to):
+        import wandb
+
+        wandb_dir = os.path.abspath(os.path.join(cfg.out_dir, "wandb"))
+        wandb_cache_dir = os.path.join(wandb_dir, "cache")
+        wandb_config_dir = os.path.join(wandb_dir, "config")
+        wandb_data_dir = os.path.join(wandb_dir, "data")
+        for path in [wandb_dir, wandb_cache_dir, wandb_config_dir, wandb_data_dir]:
+            os.makedirs(path, exist_ok=True)
+        os.environ["WANDB_DIR"] = wandb_dir
+        os.environ["WANDB_CACHE_DIR"] = wandb_cache_dir
+        os.environ["WANDB_CONFIG_DIR"] = wandb_config_dir
+        os.environ["WANDB_DATA_DIR"] = wandb_data_dir
+        wandb.init(
+            project=cfg.wandb.project,
+            name=cfg.wandb.run_name,
+            dir=wandb_dir,
+            settings=wandb.Settings(root_dir=wandb_dir, x_files_dir=wandb_dir),
+        )
 
     # transformers>=5 renamed Trainer's tokenizer arg to processing_class.
     trainer_init_params = inspect.signature(Seq2SeqTrainer.__init__).parameters

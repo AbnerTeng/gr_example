@@ -11,7 +11,18 @@ from tqdm import tqdm
 
 from src.msmarco_utils import load_docs_and_queries_by_split
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+def get_device() -> str:
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available, and CPU fallback is disabled. "
+            "Please run on a CUDA-ready machine or install a PyTorch build "
+            "compatible with the installed NVIDIA driver."
+        )
+    return "cuda"
+
+
+DEVICE = get_device()
 
 
 def last_token_pool(

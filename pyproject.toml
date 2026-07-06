@@ -16,6 +16,7 @@ dependencies = [
     "wandb",
     "numpy",
     "accelerate>=1.1.0",
+    "matplotlib>=3.10.9",
 ]
 
 [tool.setuptools.packages.find]
