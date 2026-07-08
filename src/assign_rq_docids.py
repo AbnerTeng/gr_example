@@ -5,6 +5,8 @@ import hydra
 import numpy as np
 from omegaconf import DictConfig
 
+from src.msmarco_utils import load_docs_and_queries_by_split
+
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
 def main(cfg: DictConfig) -> None:
@@ -14,11 +16,19 @@ def main(cfg: DictConfig) -> None:
     doc_embs = np.load(p.doc_embeddings).astype(np.float32)  # (N, D), L2-normalized
     print(f"  shape: {doc_embs.shape}")
 
-    print("Loading doc semids...")
-    with open(p.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
-
-    doc_semids = [d["doc_id"] for d in raw if d.get("operation") == "indexing"]
+    split_files = [
+        ("train", p.msmarco_train),
+        ("valid", p.msmarco_valid),
+        ("test", p.msmarco_test),
+    ]
+    print("Loading doc semids from MSMARCO (train + valid + test docs)...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
+    doc_semids = [d["doc_id"] for d in docs]
     assert len(doc_semids) == doc_embs.shape[0], "Count mismatch!"
 
     print(f"Running {rq.n_levels}-level RQ (n_codes={rq.n_codes}) with FAISS KMeans...")

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "t5-gr"
@@ -15,6 +15,8 @@ dependencies = [
     "tqdm",
     "wandb",
     "numpy",
+    "accelerate>=1.1.0",
+    "matplotlib>=3.10.9",
 ]
 
 [tool.setuptools.packages.find]
@@ -22,9 +24,9 @@ where = ["."]
 include = ["src*"]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
+torch = { index = "pytorch-cu121" }
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
 explicit = true

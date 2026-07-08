@@ -4,6 +4,8 @@ import random
 import hydra
 from omegaconf import DictConfig
 
+from src.msmarco_utils import load_docs_and_queries_by_split
+
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
 def main(cfg: DictConfig) -> None:
@@ -14,16 +16,30 @@ def main(cfg: DictConfig) -> None:
     with open(p.semid_to_rqid) as f:
         semid_to_rqid = json.load(f)
 
-    print("Loading MSMARCO train data...")
-    with open(p.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
+    split_files = [
+        ("train", p.msmarco_train),
+        ("valid", p.msmarco_valid),
+        ("test", p.msmarco_test),
+    ]
+    print("Loading MSMARCO splits...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
+
+    train_queries = queries_by_split["train"] + queries_by_split["valid"]
+    test_queries = queries_by_split["test"]
+    print(
+        f"Using train queries from train+valid: {len(train_queries)}, "
+        f"test queries from test: {len(test_queries)}"
+    )
 
     samples, skipped = [], 0
 
     # query -> rqdocid
-    for d in raw:
-        if d.get("operation") != "query":
-            continue
+    for d in train_queries:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             skipped += 1
@@ -33,9 +49,7 @@ def main(cfg: DictConfig) -> None:
 
     # document text -> rqdocid
     n_docs = 0
-    for d in raw:
-        if d.get("operation") != "indexing":
-            continue
+    for d in docs:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             continue
@@ -69,13 +83,9 @@ def main(cfg: DictConfig) -> None:
     print(f"Saved train → {p.train_data}")
 
     print("Building test set...")
-    with open(p.msmarco_test) as f:
-        test_raw = [json.loads(line) for line in f]
 
     test_samples = []
-    for d in test_raw:
-        if d.get("operation") != "query":
-            continue
+    for d in test_queries:
         semid = d["doc_id"]
         if semid not in semid_to_rqid:
             continue

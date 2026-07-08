@@ -1,5 +1,4 @@
 import os
-import json
 from typing import List
 
 import hydra
@@ -10,7 +9,20 @@ from omegaconf import DictConfig
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+from src.msmarco_utils import load_docs_and_queries_by_split
+
+
+def get_device() -> str:
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available, and CPU fallback is disabled. "
+            "Please run on a CUDA-ready machine or install a PyTorch build "
+            "compatible with the installed NVIDIA driver."
+        )
+    return "cuda"
+
+
+DEVICE = get_device()
 
 
 def last_token_pool(
@@ -55,16 +67,25 @@ def encode(
 def main(cfg: DictConfig) -> None:
     os.makedirs(cfg.paths.data_dir, exist_ok=True)
 
-    print("Loading MSMARCO data...")
-    with open(cfg.paths.msmarco_train) as f:
-        raw = [json.loads(line) for line in f]
+    split_files = [
+        ("train", cfg.paths.msmarco_train),
+        ("valid", cfg.paths.msmarco_valid),
+        ("test", cfg.paths.msmarco_test),
+    ]
+    print("Loading MSMARCO data (train + valid + test docs)...")
+    docs, queries_by_split, format_by_split = load_docs_and_queries_by_split(split_files)
+    for split_name, _ in split_files:
+        print(
+            f"  {split_name}: format={format_by_split[split_name]}, "
+            f"queries={len(queries_by_split[split_name])}"
+        )
+    print(f"Merged docs: {len(docs)}")
+    if not docs:
+        raise ValueError(
+            "No documents found in MSMARCO splits. Check dataset file paths and format."
+        )
 
-    docs = {d["doc_id"]: d for d in raw if d.get("operation") == "indexing"}
-    queries = [d for d in raw if d.get("operation") == "query"]
-    print(f"Docs: {len(docs)}, Queries: {len(queries)}")
-
-    doc_list = list(docs.values())
-    doc_texts = [d["text"] for d in doc_list]  # use full passage text
+    doc_texts = [d["text"] for d in docs]  # use full passage text
 
     print(f"Loading {cfg.emb.model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(cfg.emb.model_name, trust_remote_code=True)
@@ -76,6 +97,16 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(cfg.paths.doc_embeddings):
         print("Loading cached doc embeddings...")
         doc_embs = np.load(cfg.paths.doc_embeddings)
+        if doc_embs.shape[0] != len(doc_texts):
+            print(
+                "Cached embeddings size mismatch "
+                f"(cache={doc_embs.shape[0]}, docs={len(doc_texts)}), regenerating..."
+            )
+            doc_embs = encode(doc_texts, tokenizer, model, batch_size=cfg.emb.batch_size)
+            np.save(cfg.paths.doc_embeddings, doc_embs)
+            print(
+                f"Saved embeddings to {cfg.paths.doc_embeddings}, shape: {doc_embs.shape}"
+            )
     else:
         print("Encoding documents...")
         doc_embs = encode(doc_texts, tokenizer, model, batch_size=cfg.emb.batch_size)
