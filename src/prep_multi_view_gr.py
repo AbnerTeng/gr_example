@@ -145,7 +145,7 @@ def _normalized_query_identity(input_text):
 
 
 def _collides_with_validation(source, exact_queries, query_bags):
-    if source["source"] != "pseudo_query":
+    if source["source"] not in {"query", "pseudo_query"}:
         return False
     exact, bag = _normalized_query_identity(source["input"])
     return exact in exact_queries or bag in query_bags
