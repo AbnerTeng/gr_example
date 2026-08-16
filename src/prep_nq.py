@@ -99,9 +99,13 @@ def main():
         print(f"saved {name}_query_embeddings {Q.shape}")
 
     # true oracle ceiling on the full corpus -- the 20k probe was optimistic
-    dev = torch.from_numpy(np.load(f"{args.out_dir}/test_query_embeddings.npy")).cuda()
-    Dg = torch.from_numpy(D).cuda()
-    gold = torch.from_numpy(np.load(f"{args.out_dir}/test_query_docidx.npy")).cuda()
+    dev = torch.from_numpy(
+        np.load(f"{args.out_dir}/test_query_embeddings.npy")
+    ).to(args.device)
+    Dg = torch.from_numpy(D).to(args.device)
+    gold = torch.from_numpy(
+        np.load(f"{args.out_dir}/test_query_docidx.npy")
+    ).to(args.device)
     hits = {k: 0 for k in (1, 5, 10, 100)}
     for i in range(0, len(dev), 256):
         s = dev[i : i + 256] @ Dg.t()

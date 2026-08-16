@@ -31,7 +31,14 @@ def parse_args():
     ap.add_argument("--max-doc-len", type=int, default=256)
     ap.add_argument("--max-query-len", type=int, default=64)
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--seed", type=int, default=42)
     return ap.parse_args()
+
+
+def set_generation_seed(seed: int):
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def norm(s: str) -> str:
@@ -41,6 +48,7 @@ def norm(s: str) -> str:
 @torch.no_grad()
 def main():
     args = parse_args()
+    set_generation_seed(args.seed)
     docs = [json.loads(l) for l in open(args.docs)]
     test = [json.loads(l) for l in open(args.test_queries)]
     test_exact = {norm(q["query"]) for q in test}
