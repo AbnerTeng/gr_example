@@ -23,7 +23,11 @@ from transformers import (
 )
 
 from .dataset import GRDataset
-from .inference import build_rq_trie, RQTrieLogitsProcessor, TrieNode
+from .multi_view_tokenizer import (
+    add_multi_view_special_tokens,
+    build_multi_view_special_tokens,
+    validate_atomic_tokens,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,23 +38,56 @@ def _report_to_wandb(report_to) -> bool:
     return "wandb" in report_to
 
 
+def route_view_index(route: str, n_views: int, n_levels: int) -> int:
+    if n_views <= 0 or n_levels <= 0 or n_levels % n_views != 0:
+        raise ValueError(
+            f"invalid view/layer shape: n_views={n_views}, n_levels={n_levels}"
+        )
+    layers = re.findall(r"<r(\d+)_\d+>", route)
+    if not layers:
+        raise ValueError(f"route contains no RQ layer tokens: {route!r}")
+    first_layer = int(layers[0])
+    levels_per_view = n_levels // n_views
+    view = first_layer // levels_per_view
+    expected_layers = list(
+        range(view * levels_per_view, (view + 1) * levels_per_view)
+    )
+    if view >= n_views or [int(layer) for layer in layers] != expected_layers:
+        raise ValueError(f"route violates view/layer namespace contract: {route!r}")
+    return view
+
+
 class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
     def __init__(
         self,
         *args,
-        trie_root: TrieNode,
         gt_rqids: List[str],
+        eval_rqids_by_view: List[List[str]],
+        eval_n_levels: int,
         eval_tokenizer: AutoTokenizer,
         eval_beams: int = 10,
         max_out_len: int = 128,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.trie_root = trie_root
+        self.processed_input_tokens = 0
+        self.processed_target_tokens = 0
         self.gt_rqids = gt_rqids
+        self.eval_rqids_by_view = eval_rqids_by_view
+        self.eval_n_levels = eval_n_levels
+        self._fast_procs = None
         self.eval_tokenizer = eval_tokenizer
         self.eval_beams = eval_beams
         self.max_out_len = max_out_len
+
+    def compute_loss(self, model, inputs, *args, **kwargs):
+        attention_mask = inputs.get("attention_mask")
+        labels = inputs.get("labels")
+        if attention_mask is not None:
+            self.processed_input_tokens += int(attention_mask.sum().item())
+        if labels is not None:
+            self.processed_target_tokens += int((labels != -100).sum().item())
+        return super().compute_loss(model, inputs, *args, **kwargs)
 
     @torch.no_grad()
     def evaluate(
@@ -61,13 +98,29 @@ class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
         **kwargs,
     ) -> Dict[str, float]:
         del ignore_keys, kwargs  # compatibility with newer Trainer.evaluate() kwargs
+        if self.args.world_size != 1:
+            raise RuntimeError(
+                "custom constrained evaluation currently supports world_size=1 only"
+            )
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
         dataloader = self.get_eval_dataloader(eval_dataset)
 
         self.model.eval()
-        logits_proc = LogitsProcessorList(
-            [RQTrieLogitsProcessor(self.trie_root, self.eval_tokenizer.eos_token_id)]
-        )
+        if self._fast_procs is None:
+            from .fast_trie import FastRQTrie, FastRQTrieLogitsProcessor
+
+            self._fast_procs = [
+                FastRQTrieLogitsProcessor(
+                    FastRQTrie(
+                        routes,
+                        self.eval_tokenizer,
+                        self.eval_tokenizer.eos_token_id,
+                    ),
+                    len(self.eval_tokenizer),
+                    self.model.device,
+                )
+                for routes in self.eval_rqids_by_view
+            ]
 
         hits: Dict[int, float] = {1: 0, 5: 0, 10: 0}
         n: int = 0
@@ -75,24 +128,56 @@ class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
         for batch in dataloader:
             batch = self._prepare_inputs(batch)
             bs = batch["input_ids"].shape[0]
-            out = self.model.generate(
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                num_beams=self.eval_beams,
-                num_return_sequences=self.eval_beams,
-                max_new_tokens=self.max_out_len,
-                logits_processor=logits_proc,
-            )
-            decoded = self.eval_tokenizer.batch_decode(out, skip_special_tokens=False)
+            row_views = [
+                route_view_index(
+                    self.gt_rqids[n + row],
+                    len(self._fast_procs),
+                    self.eval_n_levels,
+                )
+                for row in range(bs)
+            ]
+            beams_by_row = [None] * bs
 
-            for i in range(bs):
-                gt = self.gt_rqids[n + i]
-                beams = [
-                    " ".join(
-                        re.findall(r"<r\d+_\d+>", decoded[i * self.eval_beams + j])
-                    )
-                    for j in range(self.eval_beams)
+            for view, processor in enumerate(self._fast_procs):
+                row_indices = [
+                    row for row, row_view in enumerate(row_views) if row_view == view
                 ]
+                if not row_indices:
+                    continue
+                tensor_indices = torch.tensor(
+                    row_indices, dtype=torch.long, device=batch["input_ids"].device
+                )
+                out = self.model.generate(
+                    input_ids=batch["input_ids"].index_select(0, tensor_indices),
+                    attention_mask=batch["attention_mask"].index_select(
+                        0, tensor_indices
+                    ),
+                    num_beams=self.eval_beams,
+                    num_return_sequences=self.eval_beams,
+                    max_new_tokens=self.max_out_len,
+                    logits_processor=LogitsProcessorList([processor]),
+                )
+                decoded = self.eval_tokenizer.batch_decode(
+                    out, skip_special_tokens=False
+                )
+                for local_row, original_row in enumerate(row_indices):
+                    beams_by_row[original_row] = [
+                        " ".join(
+                            re.findall(
+                                r"<r\d+_\d+>",
+                                decoded[
+                                    local_row * self.eval_beams + beam_index
+                                ],
+                            )
+                        )
+                        for beam_index in range(self.eval_beams)
+                    ]
+
+            for row in range(bs):
+                gt = self.gt_rqids[n + row]
+                beams = beams_by_row[row]
+                if beams is None:
+                    raise RuntimeError(f"no view-specific decode for eval row {n + row}")
                 for k in [1, 5, 10]:
                     if gt in beams[:k]:
                         hits[k] += 1
@@ -113,13 +198,31 @@ class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
         return metrics
 
 
-def find_best_checkpoint(out_dir: str):
-    """Return best_model_checkpoint from the most recent trainer_state.json, or None."""
-    states = sorted(glob.glob(f"{out_dir}/checkpoint-*/trainer_state.json"))
+def validate_multi_view_training_contract(enabled, n_views, n_levels):
+    if not enabled:
+        return
+    if n_views != 3:
+        raise ValueError(
+            f"Multi-DocID training requires exactly 3 views; got {n_views}"
+        )
+    if n_levels % n_views != 0:
+        raise ValueError(
+            f"n_levels={n_levels} must be divisible by n_views={n_views}"
+        )
 
+
+def find_best_checkpoint(out_dir: str):
+    """Return best_model_checkpoint from the numerically latest trainer state."""
+    states = glob.glob(f"{out_dir}/checkpoint-*/trainer_state.json")
     if not states:
         return None
-    with open(states[-1]) as f:
+
+    def checkpoint_step(path):
+        match = re.search(r"checkpoint-(\d+)", path)
+        return int(match.group(1)) if match else -1
+
+    latest_state = max(states, key=checkpoint_step)
+    with open(latest_state) as f:
         return json.load(f).get("best_model_checkpoint")
 
 
@@ -127,11 +230,24 @@ def find_best_checkpoint(out_dir: str):
 def main(cfg: DictConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
 
+    multi_view_cfg = cfg.get("multi_view", {})
+    multi_view_enabled = bool(multi_view_cfg.get("enabled", False))
+    n_views = int(multi_view_cfg.get("n_views", 3)) if multi_view_enabled else 1
+    validate_multi_view_training_contract(
+        multi_view_enabled, n_views, int(cfg.rq.n_levels)
+    )
     rq_tokens = [
         f"<r{level}_{c}>"
         for level in range(cfg.rq.n_levels)
         for c in range(cfg.rq.n_codes)
     ]
+    special_tokens = (
+        build_multi_view_special_tokens(
+            cfg.rq.n_levels, cfg.rq.n_codes, n_views
+        )
+        if multi_view_enabled
+        else rq_tokens
+    )
 
     best_ckpt = find_best_checkpoint(cfg.out_dir)
     model_path = best_ckpt or cfg.base_model
@@ -139,21 +255,56 @@ def main(cfg: DictConfig) -> None:
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     if best_ckpt is None:
-        tokenizer.add_tokens(rq_tokens, special_tokens=True)
+        n_added = add_multi_view_special_tokens(tokenizer, special_tokens)
+        log.info(f"  Added {n_added} special tokens")
+    validate_atomic_tokens(tokenizer, special_tokens)
 
     log.info(f"  Vocab size: {len(tokenizer)}")
 
     log.info(f"Loading model from {model_path}")
     model = T5ForConditionalGeneration.from_pretrained(model_path)
+    base_vocab_size = model.get_input_embeddings().num_embeddings
     model.resize_token_embeddings(len(tokenizer))
+
+    # Seed the new DocID token embeddings with their RQ codebook vectors.
+    # T5-large's d_model equals the codebook dimension and the embeddings are
+    # tied, so the decoder logit for code k becomes <hidden, centroid_k>:
+    # nearest-centroid decoding is available from step 0, and semantically close
+    # codes start close together instead of at random points.
+    if best_ckpt is None and cfg.get("codebook_init", None):
+        import numpy as np
+
+        cb = np.load(cfg.codebook_init)  # (n_levels, n_codes, D)
+        emb = model.get_input_embeddings().weight.data
+        base_rows = base_vocab_size
+        target_norm = emb[:base_rows].norm(dim=-1).mean()
+        n_set = 0
+        for level in range(cb.shape[0]):
+            vecs = torch.from_numpy(cb[level]).float()
+            vecs = vecs / vecs.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            vecs = vecs * target_norm * float(cfg.get("codebook_init_scale", 1.0))
+            for code in range(cb.shape[1]):
+                tid = tokenizer.convert_tokens_to_ids(f"<r{level}_{code}>")
+                if tid is not None and 0 <= tid < emb.shape[0]:
+                    emb[tid] = vecs[code].to(emb.dtype)
+                    n_set += 1
+        log.info(f"  codebook-init: seeded {n_set} DocID tokens, target norm "
+                 f"{target_norm:.1f} x {float(cfg.get('codebook_init_scale', 1.0))}")
 
     log.info("Building RQ trie...")
 
     with open(cfg.paths.idx_to_rqid) as f:
         idx_to_rqid = json.load(f)
-
-    trie_root = build_rq_trie(idx_to_rqid, tokenizer)
-    log.info(f"  Trie built from {len(set(idx_to_rqid))} unique docids")
+    eval_rqids_by_view = [[] for _ in range(n_views)]
+    for route in idx_to_rqid:
+        view = route_view_index(route, n_views, int(cfg.rq.n_levels))
+        eval_rqids_by_view[view].append(route)
+    if any(not routes for routes in eval_rqids_by_view):
+        raise ValueError("every configured view must have at least one evaluation route")
+    log.info(
+        "  Loaded evaluation DocIDs by view: "
+        + ", ".join(str(len(set(routes))) for routes in eval_rqids_by_view)
+    )
 
     log.info("Loading datasets...")
     train_ds = GRDataset(
@@ -234,17 +385,48 @@ def main(cfg: DictConfig) -> None:
         eval_dataset=test_ds,
         **trainer_processing_kwargs,
         data_collator=collator,
-        trie_root=trie_root,
         gt_rqids=gt_rqids,
+        eval_rqids_by_view=eval_rqids_by_view,
+        eval_n_levels=int(cfg.rq.n_levels),
         eval_tokenizer=tokenizer,
         eval_beams=t.eval_beams,
         max_out_len=cfg.data.max_out_len,
     )
 
     log.info("Starting training...")
-    trainer.train()
+    train_result = trainer.train()
     trainer.save_model(cfg.out_dir)
+    token_ids_before_save = {
+        token: tokenizer.convert_tokens_to_ids(token) for token in special_tokens
+    }
     tokenizer.save_pretrained(cfg.out_dir)
+    reloaded_tokenizer = AutoTokenizer.from_pretrained(cfg.out_dir)
+    validate_atomic_tokens(reloaded_tokenizer, special_tokens)
+    token_ids_after_reload = {
+        token: reloaded_tokenizer.convert_tokens_to_ids(token)
+        for token in special_tokens
+    }
+    if token_ids_after_reload != token_ids_before_save:
+        raise RuntimeError("special-token IDs changed after tokenizer save/reload")
+    training_manifest = {
+        "shared_model_instances": 1,
+        "multi_view_enabled": multi_view_enabled,
+        "n_views": n_views,
+        "n_train_examples": len(train_ds),
+        "n_eval_examples": len(test_ds),
+        "configured_epochs": float(t.epochs),
+        "completed_epochs": float(trainer.state.epoch or 0.0),
+        "optimizer_steps": int(trainer.state.global_step),
+        "world_size": int(training_args.world_size),
+        "processed_input_tokens_local": trainer.processed_input_tokens,
+        "processed_target_tokens_local": trainer.processed_target_tokens,
+        "processed_tokens_local": (
+            trainer.processed_input_tokens + trainer.processed_target_tokens
+        ),
+        "train_metrics": train_result.metrics,
+    }
+    with open(os.path.join(cfg.out_dir, "training_manifest.json"), "w") as handle:
+        json.dump(training_manifest, handle, indent=2)
     log.info(f"Model saved → {cfg.out_dir}")
 
 

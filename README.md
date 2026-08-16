@@ -1,100 +1,123 @@
-# Example GR
+# Shared-T5 Multi-DocID Generative Retrieval
 
-The standard training recipe to train a Generative Retrieval (GR) model
+This repository implements Multi-DocID generative retrieval with one shared T5:
 
-## Quick start
+- each document receives nine residual-quantization codes;
+- the codes are split into exactly three contiguous views of three codes;
+- each source is expanded into three view-conditioned training examples;
+- inference runs the same T5 under three view-specific trie constraints;
+- route candidates are expanded through collision-preserving posting lists and fused at document level.
 
-Use `uv` to build the virtual environment
+The primary parameter-free ranker is beam-conditional posterior fusion. Majority voting, validation-only calibration, and a lightweight linear reranker are retained as baselines or ablations.
 
-```bash
-uv sync
-```
-
-The default PyTorch source is configured for CUDA 12.1 (`pytorch-cu121`). If your CUDA setup is different, adjust the `torch` source/package and refresh `uv.lock`.
-
-## Prepare dataset
-
-> We use MSMARCO-100k (microsoft/ms_marco) as the example dataset. Note that it's the v1.1 one.
-
-The overall data preparation script can be directly run by
+## Environment
 
 ```bash
-bash scripts/preprocess.sh
+source .venv/bin/activate
+export PYTHONPATH=.
 ```
 
-Below is the detail of data preparation and preprocessing
+The training and evaluation code expects PyTorch, Transformers, Hydra/OmegaConf, NumPy, and FAISS. W&B is optional for RQ construction and enabled for the formal T5 configs.
 
-### Assign RQ docids
+## Multi-DocID contract
 
-- We assign unique docid to each document with Residual Quantization (RQ) codebooks.
-- We first use a lightweight embedding model (Qwen3-0.6B-Embedding) to generate document embeddings (the code is in `src/generate_embedding.py`).
+For a nine-level RQ identifier, the three routes are serialized as:
 
-### Generate pseudo queries
+```text
+<view_0> source -> <r0_x> <r1_y> <r2_z>
+<view_1> source -> <r3_x> <r4_y> <r5_z>
+<view_2> source -> <r6_x> <r7_y> <r8_z>
+```
 
-For better retrieval performance, we generate 5 additional pseudo queries for each document using docTTTTTquery [Nogueira et al, 2019].
+Training, preparation, and standard evaluation require exactly three views. `--single-view` in `src.eval_multi_view_gr` is diagnostic inference only and does not change the artifact contract.
 
-## Model Training
+## Pipeline
 
-We adopt T5-Large as the base GR model, which aligns with most GR research.
+### 1. Prepare corpus embeddings
 
-Execute the below script to start training the model
+NQ:
 
 ```bash
-bash scripts/train.sh
+python -m src.prep_nq --help
 ```
 
-All model and training configurations are stored in `configs/train.yaml`
-
-## Evaluation performance
-
-| Model/Metrics | Hits@1 | Hits@5 | Hits@10 |
-|---------------|--------|--------|---------|
-| T5-Large      | 0.2544 | 0.4553 | 0.5089  |
-
-## Analysis utilities
-
-After preprocessing, the repository includes several lightweight analysis scripts
-for checking whether embedding similarity and RQ DocID prefixes are aligned. They
-use `data/doc_embeddings.npy`, `data/rq_codes.npy` or `data/idx_to_rqid.json`, and
-write CSV/JSON summaries plus optional plots under `outputs/`.
-
-Query-side checks:
+Fixed MS MARCO 300K subset:
 
 ```bash
-# Where does each query's gold document rank by embedding similarity?
-bash scripts/analyze_query_gold_rank.sh --output-dir outputs/query_gold_rank
-
-# Do retrieved top-K docs share RQ prefixes with the gold document?
-bash scripts/analyze_query_rq_prefix.sh \
-  --k-values 10,50,100 \
-  --output-dir outputs/query_rq_prefix
-
-# Is query-doc similarity predictive of sharing the gold RQ prefix?
-bash scripts/analyze_query_rq_ranking_consistency.sh \
-  --knn-k 100 \
-  --output-dir outputs/query_rq_ranking_consistency
+python -m src.build_msmarco_subset --help
+python -m src.embed_msmarco300k --help
 ```
 
-Document-side checks:
+### 2. Construct nine-code RQ identifiers
 
 ```bash
-# Do documents with longer shared RQ prefixes have higher embedding similarity?
-bash scripts/analyze_rq_semanticity.sh \
-  --target-pairs 100000 \
-  --output-dir outputs/rq_semanticity
-
-# Do embedding nearest neighbors share RQ prefixes?
-bash scripts/analyze_rq_neighbor_prefix.sh \
-  --k-values 10,50,100 \
-  --output-dir outputs/rq_neighbor_prefix
-
-# Is doc-doc embedding similarity predictive of sharing RQ prefixes?
-bash scripts/analyze_rq_ranking_consistency.sh \
-  --knn-k 100 \
-  --output-dir outputs/rq_ranking_consistency
+python -m src.train_rq --config-name rq9_sliced
+python -m src.train_rq --config-name msmarco300k_rq9_sliced
 ```
 
-Useful options shared by the analysis scripts include `--levels` for RQ prefix
-depth, `--no-plots` to skip figures, and `--max-queries` / `--anchor-docs` for
-quick smaller runs. Query-side scripts cache query embeddings at
-`data/test_query_embeddings.npy` unless `--no-encode` is set.
+Both configs produce `rq_codes.npy`, `idx_to_rqid.json`, `view_codes.npy`, and `idx_to_view_ids.json`. The required view shape is `(documents, 3, 3)`.
+
+### 3. Generate filtered pseudo queries
+
+```bash
+python -m src.gen_pseudo_queries_nq --help
+python -m src.gen_pseudo_queries_msmarco300k --help
+```
+
+The MS MARCO generator produces exactly five normalized, unique, non-dev pseudo queries per retained document and validates contiguous resume output.
+
+### 4. Prepare shared-T5 datasets
+
+```bash
+python -m src.prep_multi_view_gr --help
+```
+
+This produces exact-three-view training examples, validation/test query files, document/view mappings, and posting-compatible route artifacts.
+
+### 5. Train the shared T5
+
+```bash
+python -m src.train --config-name train_multi_view_nq
+python -m src.train --config-name train_multi_view_msmarco300k
+python -m src.train --config-name train_multi_view_msmarco300k_docT5query5
+```
+
+The formal configs use micro-batch 16, gradient accumulation 8, and effective batch size 128.
+
+### 6. Evaluate and fuse document candidates
+
+```bash
+python -m src.eval_multi_view_gr --help
+python -m src.fit_multi_view_calibration --help
+python -m src.fit_lightweight_multi_view_reranker --help
+python -m src.eval_lightweight_multi_view_reranker --help
+```
+
+`src.eval_multi_view_gr` supports majority voting and beam-conditional posterior fusion. Route collisions retain all posting-list documents and split route mass uniformly across the collision set.
+
+Single-DocID evaluation remains available as a controlled baseline:
+
+```bash
+python -m src.eval_gr --help
+```
+
+## Diagnostics
+
+```bash
+python -m src.eval_multi_view_codes --help
+python -m src.eval_rq_view_predictability --help
+```
+
+These report route utilization/collisions and cross-view query predictability/complementarity.
+
+## Tests
+
+The test modules are self-contained and can be run without pytest:
+
+```bash
+for test_file in tests/test_*.py; do
+  python "$test_file"
+done
+```
+
+Generated data, checkpoints, outputs, logs, W&B runs, local research artifacts, and Python caches are excluded from Git.

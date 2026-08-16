@@ -1,0 +1,16 @@
+defaults:
+  - rq
+  - _self_
+
+paths:
+  doc_embeddings: ${paths.data_dir}/msmarco300k/doc_embeddings.npy
+
+variant: msmarco300k_rq9_sliced_s${train.seed}
+quantizer:
+  type: rq
+rq:
+  n_levels: 9
+  n_codes: 256
+view_size: 3
+wandb:
+  run_name: ${variant}

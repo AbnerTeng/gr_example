@@ -1,0 +1,27 @@
+defaults:
+  - train
+  - _self_
+
+paths:
+  train_data: ${paths.root_dir}/data/gr/msmarco300k_rq9_multiview_s42/train.jsonl
+  test_data: ${paths.root_dir}/data/gr/msmarco300k_rq9_multiview_s42/validation_expanded.jsonl
+  idx_to_rqid: ${paths.root_dir}/data/gr/msmarco300k_rq9_multiview_s42/all_view_ids.json
+
+rq:
+  n_levels: 9
+  n_codes: 256
+
+multi_view:
+  enabled: true
+  n_views: 3
+
+codebook_init: ${paths.root_dir}/data/rq_runs/msmarco300k_rq9_sliced_s42/rq_codebooks.npy
+out_dir: ${paths.root_dir}/checkpoints/msmarco300k-t5-large-rq9-multiview-s42
+
+data:
+  max_in_len: 512
+  max_out_len: 8
+
+wandb:
+  project: t5-gr-msmarco300k
+  run_name: msmarco300k-t5-large-rq9-multiview-s42

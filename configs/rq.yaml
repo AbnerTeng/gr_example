@@ -1,0 +1,42 @@
+defaults:
+  - _self_
+
+paths:
+  root_dir: ${hydra:runtime.cwd}
+  data_dir: ${paths.root_dir}/data
+  doc_embeddings: ${paths.data_dir}/doc_embeddings.npy
+
+variant: rq_s${train.seed}
+out_dir: ${paths.data_dir}/rq_runs/${variant}
+
+quantizer:
+  type: rq
+
+rq:
+  n_levels: 4
+  n_codes: 256
+
+# RQ9 Multi-DocID overrides this to 3, producing three 3-code views.
+view_size: null
+
+train:
+  seed: 42
+  epochs: 30
+  batch_size: 1024
+  lr: 1e-3
+  kmeans_init: true
+  kmeans_iter: 20
+  revive_dead_codes: true
+  revive_every: 1
+  device: cuda
+  log_every: 20
+
+loss:
+  recon: mse
+  codebook_weight: 1.0
+  commit_weight: 0.25
+
+wandb:
+  enabled: true
+  project: multi-docid-gr
+  run_name: ${variant}

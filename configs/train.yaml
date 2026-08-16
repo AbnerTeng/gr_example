@@ -11,30 +11,17 @@ paths:
   train_data: ${paths.data_dir}/train.jsonl
   test_data: ${paths.data_dir}/test.jsonl
 
-emb:
-  model_name: Qwen/Qwen3-Embedding-0.6B
-  batch_size: 128
-
 rq:
   n_levels: 4
   n_codes: 256
-
-assign_rq_docids:
-  n_iter: 20
-  seed: 42
-
-gen_pseudo_queries:
-  model: doc2query/msmarco-t5-base-v1
-  n_queries: 5
-  batch_size: 64
-  max_doc_len: 256
-  max_query_len: 64
-  device: cuda
 
 prep_data:
   seed: 42
 
 base_model: google-t5/t5-large
+# seed DocID token embeddings from the RQ codebook (path to rq_codebooks.npy)
+codebook_init: null
+codebook_init_scale: 1.0
 out_dir: ${paths.root_dir}/checkpoints/t5-large-gr
 
 data:

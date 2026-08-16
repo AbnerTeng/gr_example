@@ -84,6 +84,9 @@ def main(cfg: DictConfig) -> None:
 
     print("Building test set...")
 
+    # doc_id -> corpus index, so downstream eval can score at document level
+    semid_to_idx = {d["doc_id"]: i for i, d in enumerate(docs)}
+
     test_samples = []
     for d in test_queries:
         semid = d["doc_id"]
@@ -95,6 +98,7 @@ def main(cfg: DictConfig) -> None:
                 "output": semid_to_rqid[semid],
                 "gt_semid": semid,
                 "gt_rqid": semid_to_rqid[semid],
+                "gt_doc_idx": semid_to_idx[semid],
             }
         )
 

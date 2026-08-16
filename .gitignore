@@ -29,6 +29,12 @@ wandb/
 
 # Claude
 .claude/
+claude.md
+
+# Local experiment logs and generated research artifacts
+logs/
+reasoning_log.json
+Multi-DocID.pdf
 
 # Misc
 *.npy
