@@ -7,6 +7,7 @@ from src.prep_multi_view_gr import (
     expand_source_example,
     load_msmarco_sources,
     load_nq_sources,
+    partition_sources_to_jsonl,
     split_validation_queries,
     validate_view_mapping,
     write_multi_view_dataset,
@@ -175,19 +176,27 @@ def test_write_multi_view_dataset_emits_training_and_document_eval_contracts():
         assert eval_queries[0]["gt_view_rqids"] == _mapping()[1]
 
 
-def test_validation_split_removes_only_real_queries_from_training():
+def test_validation_split_filters_colliding_pseudo_queries():
     train = [
-        {"input": "query: held", "doc_idx": 0, "source": "query"},
-        {"input": "query: held", "doc_idx": 1, "source": "query"},
-        {"input": "query: pseudo", "doc_idx": 0, "source": "pseudo_query"},
+        {"input": "query: held alpha", "doc_idx": 0, "source": "query"},
+        {"input": "query: held-alpha", "doc_idx": 0, "source": "pseudo_query"},
+        {"input": "query: alpha held", "doc_idx": 0, "source": "pseudo_query"},
+        {"input": "query: safe pseudo", "doc_idx": 0, "source": "pseudo_query"},
         {"input": "document: text", "doc_idx": 0, "source": "document"},
     ]
+    expected_remaining = train[3:]
+    expected_validation = [{"input": "query: held alpha", "doc_idx": 0}]
+
     remaining, validation = split_validation_queries(train, fraction=1.0, seed=42)
-    assert remaining == train[2:]
-    assert validation == [
-        {"input": "query: held", "doc_idx": 0},
-        {"input": "query: held", "doc_idx": 1},
-    ]
+    assert remaining == expected_remaining
+    assert validation == expected_validation
+
+    with tempfile.TemporaryDirectory() as directory:
+        train_path, validation_path = partition_sources_to_jsonl(
+            iter(train), directory, fraction=1.0, seed=42
+        )
+        assert _read_jsonl(train_path) == expected_remaining
+        assert _read_jsonl(validation_path) == expected_validation
 
 
 if __name__ == "__main__":
@@ -207,5 +216,5 @@ if __name__ == "__main__":
     print("PASS test_msmarco_adapter_maps_pair_docids_to_corpus_rows")
     test_write_multi_view_dataset_emits_training_and_document_eval_contracts()
     print("PASS test_write_multi_view_dataset_emits_training_and_document_eval_contracts")
-    test_validation_split_removes_only_real_queries_from_training()
-    print("PASS test_validation_split_removes_only_real_queries_from_training")
+    test_validation_split_filters_colliding_pseudo_queries()
+    print("PASS test_validation_split_filters_colliding_pseudo_queries")

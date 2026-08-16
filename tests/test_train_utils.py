@@ -1,24 +1,21 @@
-import json
 import tempfile
 from pathlib import Path
 
 from src.train import (
-    find_best_checkpoint,
+    find_latest_checkpoint,
     route_view_index,
     validate_multi_view_training_contract,
 )
 
 
-def test_find_best_checkpoint_uses_numeric_step_order():
+def test_find_latest_checkpoint_uses_numeric_step_order():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        for step, best in [(900, "best-from-900"), (1000, "best-from-1000")]:
+        for step in (900, 1000):
             checkpoint = root / f"checkpoint-{step}"
             checkpoint.mkdir()
-            (checkpoint / "trainer_state.json").write_text(
-                json.dumps({"best_model_checkpoint": best})
-            )
-        assert find_best_checkpoint(str(root)) == "best-from-1000"
+            (checkpoint / "trainer_state.json").write_text("{}")
+        assert find_latest_checkpoint(str(root)) == str(root / "checkpoint-1000")
 
 
 def test_multi_view_training_requires_exactly_three_views():
@@ -50,8 +47,8 @@ def test_route_view_index_enforces_global_layer_namespaces():
 
 
 if __name__ == "__main__":
-    test_find_best_checkpoint_uses_numeric_step_order()
-    print("PASS test_find_best_checkpoint_uses_numeric_step_order")
+    test_find_latest_checkpoint_uses_numeric_step_order()
+    print("PASS test_find_latest_checkpoint_uses_numeric_step_order")
     test_multi_view_training_requires_exactly_three_views()
     print("PASS test_multi_view_training_requires_exactly_three_views")
     test_route_view_index_enforces_global_layer_namespaces()

@@ -136,16 +136,39 @@ def _is_validation_query(source, fraction: float, seed: int):
     return int.from_bytes(digest, "big") / float(1 << 256) < fraction
 
 
+def _normalized_query_identity(input_text):
+    text = input_text.strip().lower()
+    if text.startswith("query:"):
+        text = text[len("query:") :]
+    normalized = " ".join(re.sub(r"[^a-z0-9 ]", " ", text).split())
+    return normalized, frozenset(normalized.split())
+
+
+def _collides_with_validation(source, exact_queries, query_bags):
+    if source["source"] != "pseudo_query":
+        return False
+    exact, bag = _normalized_query_identity(source["input"])
+    return exact in exact_queries or bag in query_bags
+
+
 def split_validation_queries(train_sources, fraction: float, seed: int):
-    remaining = []
-    validation = []
-    for source in train_sources:
-        if _is_validation_query(source, fraction, seed):
-            validation.append(
-                {"input": source["input"], "doc_idx": int(source["doc_idx"])}
-            )
-        else:
-            remaining.append(source)
+    train_sources = list(train_sources)
+    validation = [
+        {"input": source["input"], "doc_idx": int(source["doc_idx"])}
+        for source in train_sources
+        if _is_validation_query(source, fraction, seed)
+    ]
+    validation_identities = [
+        _normalized_query_identity(source["input"]) for source in validation
+    ]
+    exact_queries = {exact for exact, _ in validation_identities}
+    query_bags = {bag for _, bag in validation_identities}
+    remaining = [
+        source
+        for source in train_sources
+        if not _is_validation_query(source, fraction, seed)
+        and not _collides_with_validation(source, exact_queries, query_bags)
+    ]
     return remaining, validation
 
 
@@ -155,11 +178,16 @@ def partition_sources_to_jsonl(train_sources, out_dir, fraction: float, seed: in
     out_dir.mkdir(parents=True, exist_ok=True)
     train_path = out_dir / ".train_sources.tmp.jsonl"
     validation_path = out_dir / ".validation_sources.tmp.jsonl"
+    exact_queries = set()
+    query_bags = set()
     with open(train_path, "w") as train_handle, open(
         validation_path, "w"
     ) as validation_handle:
         for source in train_sources:
             if _is_validation_query(source, fraction, seed):
+                exact, bag = _normalized_query_identity(source["input"])
+                exact_queries.add(exact)
+                query_bags.add(bag)
                 validation_handle.write(
                     json.dumps(
                         {
@@ -169,7 +197,7 @@ def partition_sources_to_jsonl(train_sources, out_dir, fraction: float, seed: in
                     )
                     + "\n"
                 )
-            else:
+            elif not _collides_with_validation(source, exact_queries, query_bags):
                 train_handle.write(json.dumps(source) + "\n")
     return train_path, validation_path
 

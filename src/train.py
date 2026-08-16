@@ -211,8 +211,8 @@ def validate_multi_view_training_contract(enabled, n_views, n_levels):
         )
 
 
-def find_best_checkpoint(out_dir: str):
-    """Return best_model_checkpoint from the numerically latest trainer state."""
+def find_latest_checkpoint(out_dir: str):
+    """Return the numerically latest complete Trainer checkpoint."""
     states = glob.glob(f"{out_dir}/checkpoint-*/trainer_state.json")
     if not states:
         return None
@@ -222,8 +222,7 @@ def find_best_checkpoint(out_dir: str):
         return int(match.group(1)) if match else -1
 
     latest_state = max(states, key=checkpoint_step)
-    with open(latest_state) as f:
-        return json.load(f).get("best_model_checkpoint")
+    return os.path.dirname(latest_state)
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train")
@@ -249,12 +248,12 @@ def main(cfg: DictConfig) -> None:
         else rq_tokens
     )
 
-    best_ckpt = find_best_checkpoint(cfg.out_dir)
-    model_path = best_ckpt or cfg.base_model
+    resume_ckpt = find_latest_checkpoint(cfg.out_dir)
+    model_path = resume_ckpt or cfg.base_model
     log.info(f"Loading tokenizer from {model_path}")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-    if best_ckpt is None:
+    if resume_ckpt is None:
         n_added = add_multi_view_special_tokens(tokenizer, special_tokens)
         log.info(f"  Added {n_added} special tokens")
     validate_atomic_tokens(tokenizer, special_tokens)
@@ -271,7 +270,7 @@ def main(cfg: DictConfig) -> None:
     # tied, so the decoder logit for code k becomes <hidden, centroid_k>:
     # nearest-centroid decoding is available from step 0, and semantically close
     # codes start close together instead of at random points.
-    if best_ckpt is None and cfg.get("codebook_init", None):
+    if resume_ckpt is None and cfg.get("codebook_init", None):
         import numpy as np
 
         cb = np.load(cfg.codebook_init)  # (n_levels, n_codes, D)
@@ -394,7 +393,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     log.info("Starting training...")
-    train_result = trainer.train()
+    train_result = trainer.train(resume_from_checkpoint=resume_ckpt)
     trainer.save_model(cfg.out_dir)
     token_ids_before_save = {
         token: tokenizer.convert_tokens_to_ids(token) for token in special_tokens
