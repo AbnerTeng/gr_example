@@ -87,6 +87,44 @@ def test_resume_requires_contiguous_rows_matching_corpus():
             raise AssertionError("non-contiguous resume output must fail")
 
 
+def test_resume_rejects_empty_normalized_query():
+    corpus = [{"docid": "a", "document": "A"}]
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "pseudo.jsonl"
+        output.write_text(json.dumps({
+            "doc_idx": 0,
+            "docid": "a",
+            "pseudo_queries": ["", "q1", "q2", "q3", "q4"],
+        }) + "\n")
+        try:
+            load_resume_count(output, corpus, n_queries=5)
+        except ValueError as error:
+            assert "empty" in str(error)
+        else:
+            raise AssertionError("empty normalized resume query must fail")
+
+
+def test_resume_rechecks_current_dev_collisions():
+    corpus = [{"docid": "a", "document": "A"}]
+    dev_exact = {normalize_query("held-out query")}
+    dev_bags = {frozenset(normalize_query("held-out query").split())}
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "pseudo.jsonl"
+        output.write_text(json.dumps({
+            "doc_idx": 0,
+            "docid": "a",
+            "pseudo_queries": ["held out query", "q1", "q2", "q3", "q4"],
+        }) + "\n")
+        try:
+            load_resume_count(
+                output, corpus, 5, dev_exact=dev_exact, dev_bags=dev_bags
+            )
+        except ValueError as error:
+            assert "dev query" in str(error)
+        else:
+            raise AssertionError("dev-colliding resume query must fail")
+
+
 if __name__ == "__main__":
     test_select_queries_keeps_five_unique_non_dev_queries()
     print("PASS test_select_queries_keeps_five_unique_non_dev_queries")
@@ -96,3 +134,7 @@ if __name__ == "__main__":
     print("PASS test_default_round_budget_reaches_hard_document_fallback")
     test_resume_requires_contiguous_rows_matching_corpus()
     print("PASS test_resume_requires_contiguous_rows_matching_corpus")
+    test_resume_rejects_empty_normalized_query()
+    print("PASS test_resume_rejects_empty_normalized_query")
+    test_resume_rechecks_current_dev_collisions()
+    print("PASS test_resume_rechecks_current_dev_collisions")

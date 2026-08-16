@@ -40,9 +40,17 @@ def _iter_jsonl(path):
                 yield json.loads(line)
 
 
-def load_resume_count(output_path, corpus, n_queries: int) -> int:
-    """Validate a partial output as a contiguous corpus prefix and return its size."""
+def load_resume_count(
+    output_path,
+    corpus,
+    n_queries: int,
+    dev_exact=None,
+    dev_bags=None,
+) -> int:
+    """Validate a partial output as a filtered contiguous corpus prefix."""
     output_path = Path(output_path)
+    dev_exact = set() if dev_exact is None else dev_exact
+    dev_bags = set() if dev_bags is None else dev_bags
     if not output_path.exists():
         return 0
     corpus_iter = _iter_jsonl(corpus) if isinstance(corpus, (str, Path)) else iter(corpus)
@@ -68,8 +76,20 @@ def load_resume_count(output_path, corpus, n_queries: int) -> int:
                 raise ValueError(
                     f"resume row {expected_idx}: expected {n_queries} pseudo-queries"
                 )
-            if len({normalize_query(query) for query in queries}) != n_queries:
+            normalized_queries = [normalize_query(query) for query in queries]
+            if any(not query for query in normalized_queries):
+                raise ValueError(
+                    f"resume row {expected_idx}: pseudo-query normalizes to empty"
+                )
+            if len(set(normalized_queries)) != n_queries:
                 raise ValueError(f"resume row {expected_idx}: pseudo-queries are not unique")
+            if any(
+                query in dev_exact or frozenset(query.split()) in dev_bags
+                for query in normalized_queries
+            ):
+                raise ValueError(
+                    f"resume row {expected_idx}: pseudo-query collides with dev query"
+                )
             count += 1
     return count
 
@@ -206,7 +226,11 @@ def main():
 
     dev_exact, dev_bags = load_dev_collisions(args.dev_queries)
     resume_count = 0 if args.no_resume else load_resume_count(
-        args.output, args.corpus, args.n_queries
+        args.output,
+        args.corpus,
+        args.n_queries,
+        dev_exact=dev_exact,
+        dev_bags=dev_bags,
     )
     if args.no_resume and args.output.exists():
         args.output.unlink()
