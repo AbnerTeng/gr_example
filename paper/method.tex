@@ -1,0 +1,238 @@
+% Shared-T5 Multi-DocID method section.
+% This file is intended to be included from the main manuscript.
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Problem Formulation}
+\label{sec:problem}
+
+Let $\mathcal{D}=\{d_1,\ldots,d_N\}$ be a fixed corpus and let $q$ denote a query with a set of relevant documents $\mathcal{D}^{+}(q)\subseteq\mathcal{D}$. Generative retrieval replaces explicit query--document similarity search with autoregressive identifier generation~\citep{tay2022dsi}. A model maps $q$ to one or more discrete routes, which are subsequently resolved to documents in the corpus.
+
+A single identifier can constitute a brittle retrieval path: documents that share an identifier are indistinguishable under that path, while an incorrectly generated early token can remove the relevant document from the beam. We therefore assign each document $V=3$ identifiers and retrieve through all three routes using one shared sequence-to-sequence model. We refer to this construction as \emph{Multi-DocID}. The method consists of four stages:
+\begin{enumerate}[leftmargin=*,nosep]
+    \item construct a nine-level residual-quantized code for each document;
+    \item partition the code into three residual-code routes;
+    \item train one shared T5 to generate every route under explicit view conditioning; and
+    \item run three constrained decodes and fuse their evidence at the document level.
+\end{enumerate}
+Although we use \emph{view} as a concise index for the three routes, these are disjoint slices of one residual-quantization chain rather than independent modalities.
+
+\subsection{Residual-Quantized Multi-DocIDs}
+\label{sec:rq-multidocid}
+
+\subsubsection{Nine-level residual quantization}
+
+We first encode every document into a fixed dense representation
+\begin{equation}
+    \mathbf{x}_d=f_{\mathrm{doc}}(d)\in\mathbb{R}^{D}.
+\end{equation}
+To obtain a discrete identifier, we train an $L$-level residual quantizer with $L=9$. For each level $\ell\in\{0,\ldots,L-1\}$, let
+\begin{equation}
+    \mathcal{E}_{\ell}=\{\mathbf{e}_{\ell,k}\}_{k=0}^{K-1}
+\end{equation}
+be a codebook with $K=256$. Starting with $\mathbf{r}^{(0)}_d=\mathbf{x}_d$, greedy residual quantization selects
+\begin{align}
+    z_{d,\ell}
+    &=\arg\min_{k}\left\|\mathbf{r}^{(\ell)}_d-\mathbf{e}_{\ell,k}\right\|_2^2, \\
+    \mathbf{r}^{(\ell+1)}_d
+    &=\mathbf{r}^{(\ell)}_d-\mathbf{e}_{\ell,z_{d,\ell}}.
+\end{align}
+The reconstructed embedding is
+\begin{equation}
+    \widehat{\mathbf{x}}_d
+    =\sum_{\ell=0}^{L-1}\mathbf{e}_{\ell,z_{d,\ell}}.
+\end{equation}
+Following residual-quantized Semantic IDs~\citep{lee2022rq,tiger2023}, the implemented quantizer minimizes
+\begin{align}
+    \mathcal{L}_{\mathrm{RQ}}
+    ={}&\left\|\mathbf{x}_d-\widehat{\mathbf{x}}_d\right\|_2^2 \\
+    &+\frac{\lambda_{\mathrm{cb}}}{L}
+      \sum_{\ell=0}^{L-1}
+      \left\|\operatorname{sg}[\mathbf{r}^{(\ell)}_d]
+      -\mathbf{e}_{\ell,z_{d,\ell}}\right\|_2^2 \\
+    &+\frac{\lambda_{\mathrm{com}}}{L}
+      \sum_{\ell=0}^{L-1}
+      \left\|\mathbf{r}^{(\ell)}_d
+      -\operatorname{sg}[\mathbf{e}_{\ell,z_{d,\ell}}]\right\|_2^2,
+\end{align}
+where $\operatorname{sg}[\cdot]$ denotes stop-gradient; averaging over documents in a minibatch is implicit. We use $\lambda_{\mathrm{cb}}=1.0$ and $\lambda_{\mathrm{com}}=0.25$. We initialize each level by greedy $k$-means on its input residuals and periodically re-seed unused codes. Unlike an RQ-VAE, our quantizer operates directly on fixed document embeddings and does not learn an additional encoder--decoder around them. The implementation retains the conventional commitment term in the logged objective; because the document embeddings and residual inputs are fixed or detached, this term does not contribute gradients to the trainable quantizer parameters.
+
+\subsubsection{Three residual-code routes}
+
+The full RQ output is a nine-code tuple
+\begin{equation}
+    \mathbf{z}(d)=(z_{d,0},z_{d,1},\ldots,z_{d,8}).
+\end{equation}
+Rather than decode this tuple as one nine-token identifier, we split it into exactly three contiguous routes:
+\begin{align}
+    \rho_0(d)&=(z_{d,0},z_{d,1},z_{d,2}),\\
+    \rho_1(d)&=(z_{d,3},z_{d,4},z_{d,5}),\\
+    \rho_2(d)&=(z_{d,6},z_{d,7},z_{d,8}).
+\end{align}
+The routes have a global level-specific token namespace:
+\begin{align}
+    \rho_0(d)&\mapsto \langle r0\_z\rangle\ \langle r1\_z\rangle\ \langle r2\_z\rangle,\\
+    \rho_1(d)&\mapsto \langle r3\_z\rangle\ \langle r4\_z\rangle\ \langle r5\_z\rangle,\\
+    \rho_2(d)&\mapsto \langle r6\_z\rangle\ \langle r7\_z\rangle\ \langle r8\_z\rangle.
+\end{align}
+Here the placeholder $z$ is replaced by the selected code index. Thus, codes with the same index at different RQ levels remain distinct tokens. We add all $LK$ route tokens and three view markers $\langle\mathrm{view}_v\rangle$ to the T5 vocabulary and require each to be atomic under tokenization.
+
+The split deliberately exposes different stages of the residual hierarchy. The first route contains the largest coarse reconstruction terms, whereas the later routes encode progressively finer residual corrections. Consequently, the routes need not have equal standalone semantic fidelity. Our hypothesis is instead operational: their different collision patterns and query-conditioned decoding errors can provide complementary retrieval paths.
+
+\subsubsection{Collision-preserving route index}
+
+A three-token route is not required to uniquely identify a document. For each view $v$, we retain the complete posting list
+\begin{equation}
+    \mathcal{P}_v(r)=\{d\in\mathcal{D}:\rho_v(d)=r\}.
+\end{equation}
+This differs from appending an arbitrary uniqueness suffix, as used in some RQ-based generative recommenders~\citep{tiger2023}: a suffix removes collisions but introduces an additional token whose value may not be semantically predictable from a query. Our design preserves all colliding documents and resolves the ambiguity during document-level fusion. During training, documents that collide in a view intentionally share that view's target route; alternate routes can provide additional document-specific evidence. Each view-specific trie stores the valid three-token route language; a separate per-view posting index maps each decoded leaf route to $\mathcal{P}_v(r)$.
+
+\subsection{Shared-T5 Training}
+\label{sec:shared-training}
+
+\subsubsection{Indexing and retrieval supervision}
+
+Following the indexing/retrieval decomposition of DSI~\citep{tay2022dsi}, we train on both document content and query supervision. Let $\mathcal{X}(d)$ denote the textual sources associated with document $d$. It includes the document text, labeled training queries, and, when used, document-conditioned pseudo queries generated by docT5query~\citep{nogueira2019doct5query}. We prefix document and query sources with the strings \texttt{document:} and \texttt{query:}, respectively.
+
+For every source $x\in\mathcal{X}(d)$, we construct one example per route:
+\begin{equation}
+    \left(\langle\mathrm{view}_v\rangle\oplus x,\ \rho_v(d)\right),
+    \qquad v\in\{0,1,2\},
+\end{equation}
+where $\oplus$ denotes textual concatenation. For example,
+\begin{align*}
+    \text{input: }&\langle\mathrm{view}_1\rangle\ \texttt{query: }q,\\
+    \text{target: }&\langle r3\_a\rangle\ \langle r4\_b\rangle\ \langle r5\_c\rangle.
+\end{align*}
+The view marker occurs only in the input; the target contains the corresponding three route tokens followed by EOS.
+
+A single T5 model~\citep{raffel2020t5} with parameters $\theta$ is shared across all sources and views. Its training objective is standard teacher-forced sequence cross-entropy:
+\begin{equation}
+\label{eq:gr-loss}
+    \mathcal{L}_{\mathrm{GR}}
+    =-\sum_{d\in\mathcal{D}}
+      \sum_{x\in\mathcal{X}(d)}
+      \sum_{v=0}^{V-1}
+      \sum_{t=1}^{|\rho_v(d)|+1}
+      \log p_{\theta}\!\left(
+        y_{d,v,t}\mid y_{d,v,<t},
+        \langle\mathrm{view}_v\rangle\oplus x
+      \right).
+\end{equation}
+Unlike a three-model ensemble, this expansion does not multiply model parameters: all route mappings are learned in the same encoder--decoder.
+
+\subsubsection{Geometry-aware route-token initialization}
+
+At the beginning of a new run, we initialize the embedding of route token $\langle r\ell\_k\rangle$ with its corresponding normalized RQ centroid. Let $\overline{n}$ be the mean norm of the pretrained T5 vocabulary embeddings. We set
+\begin{equation}
+    \mathbf{w}_{\ell,k}
+    \leftarrow
+    \alpha\,\overline{n}\,
+    \frac{\mathbf{e}_{\ell,k}}
+         {\|\mathbf{e}_{\ell,k}\|_2},
+\end{equation}
+with scale $\alpha=1$ in our experiments. T5 ties its input and output embeddings; therefore, the route logits are initialized consistently with the quantizer geometry instead of treating all new route tokens as unrelated random labels. The view-marker embeddings retain their standard newly-added-token initialization.
+
+\subsection{Multi-Route Constrained Retrieval}
+\label{sec:inference}
+
+\subsubsection{View-conditioned constrained decoding}
+
+At inference time, the same query is decoded once per view:
+\begin{equation}
+    q_v=\langle\mathrm{view}_v\rangle\oplus\texttt{query: }q.
+\end{equation}
+For each $q_v$, the shared T5 performs beam search under the corresponding view-specific trie. The trie constrains every prefix to a route observed in the corpus and forces the correct global level sequence. Let the raw beam output be
+\begin{equation}
+    \widetilde{\mathcal{B}}_v(q)
+    =\bigl[(r_{v,b},s_{v,b})\bigr]_{b=1}^{B},
+\end{equation}
+where $s_{v,b}$ is the length-normalized sequence score. We deduplicate identical route strings within a view and define
+\begin{align}
+    \mathcal{B}_v(q)
+    &=\{r_{v,b}:1\leq b\leq B\},\\
+    s_v(r\mid q)
+    &=\max_{b:r_{v,b}=r}s_{v,b}.
+\end{align}
+Thus $\mathcal{B}_v(q)$ is a set of at most $B$ unique routes and $s_v$ retains the best score for each route. Our primary operating point allocates the full raw beam size $B$ to every view, rather than dividing a fixed total beam budget across views.
+
+The document candidate set is the union of the returned posting lists:
+\begin{equation}
+\label{eq:candidate-union}
+    \mathcal{C}(q)
+    =\bigcup_{v=0}^{V-1}
+      \bigcup_{r\in\mathcal{B}_v(q)}
+      \mathcal{P}_v(r).
+\end{equation}
+A document retrieved through multiple routes is represented once in $\mathcal{C}(q)$ while retaining all of its per-view evidence.
+
+\subsubsection{Beam-conditional route posterior}
+
+Raw sequence scores are not directly comparable across views. Our primary fusion rule first normalizes them within each returned view beam:
+\begin{equation}
+\label{eq:route-posterior}
+    \widehat{p}_{v,B}(r\mid q)
+    =
+    \frac{\exp s_v(r\mid q)}
+         {\sum_{r'\in\mathcal{B}_v(q)}
+          \exp s_v(r'\mid q)}.
+\end{equation}
+Equation~\ref{eq:route-posterior} is a truncated distribution conditioned on the top-$B$ returned routes; it is not the full posterior over the complete trie.
+
+We distribute each route's mass uniformly among the documents in its posting list:
+\begin{equation}
+\label{eq:view-doc-posterior}
+    \widehat{p}_{v,B}(d\mid q)
+    =
+    \sum_{\substack{r\in\mathcal{B}_v(q):\\d\in\mathcal{P}_v(r)}}
+    \frac{\widehat{p}_{v,B}(r\mid q)}
+         {|\mathcal{P}_v(r)|}.
+\end{equation}
+This realizes a simple probability model in which the route posterior is known but the owner of a colliding route is otherwise unobserved. It also prevents a large posting list from assigning the full route score to every owner.
+
+Finally, we average document evidence across views:
+\begin{equation}
+\label{eq:beam-posterior-fusion}
+    S_{\mathrm{BP}}(d,q)
+    =\frac{1}{V}\sum_{v=0}^{V-1}
+      \widehat{p}_{v,B}(d\mid q).
+\end{equation}
+Documents are ranked in descending order of $S_{\mathrm{BP}}$; ties are broken by the best route rank and then the document index. This fusion is parameter-free, operates after route-to-document expansion, and assigns equal prior weight to each decoding view.
+
+\subsection{Alternative Document-Level Fusion Rules}
+\label{sec:fusion-ablations}
+
+We retain three alternative families to separate candidate complementarity from the effect of score aggregation. These are baselines or upper bounds rather than the primary inference rule in Equation~\ref{eq:beam-posterior-fusion}.
+
+\paragraph{Majority voting.}
+MINDER establishes the broader pattern of aggregating evidence from multiple generated identifiers~\citep{li2023minder}. As a deliberately confidence-free baseline, we rank documents by cross-view support:
+\begin{equation}
+    S_{\mathrm{vote}}(d,q)
+    =\sum_{v=0}^{V-1}
+      \mathbb{I}\!\left[
+        d\in\bigcup_{r\in\mathcal{B}_v(q)}\mathcal{P}_v(r)
+      \right].
+\end{equation}
+Ties are resolved by the best route rank across views and then the document index. This baseline tests whether repeated retrieval alone explains the gain, but discards route confidence and collision size.
+
+\paragraph{Validation-calibrated score fusion.}
+For each view, we fit a temperature $T_v>0$ and bias $b_v$ on validation candidates:
+\begin{equation}
+    g_v(s)=s/T_v+b_v.
+\end{equation}
+The calibrated LogSumExp score is
+\begin{equation}
+    S_{\mathrm{LSE}}(d,q)
+    =\log\sum_{v\in\mathcal{H}(d,q)}
+      \exp g_v(s_v(d\mid q)),
+\end{equation}
+where $\mathcal{H}(d,q)$ is the set of views that retrieved $d$, and $s_v(d\mid q)$ is the best route score through which view $v$ retrieved it. Sum and max aggregation are corresponding ablations. Calibration parameters are fit only on validation data and then frozen for test evaluation.
+
+\paragraph{Lightweight learned upper bound.}
+We additionally train a linear logistic document reranker using 17 features: for each of three views, calibrated score, presence, reciprocal route rank, and $\log(1+\text{collision size})$; plus hit count, best reciprocal rank, and calibrated LSE, max, and mean. For a missing view, its calibrated-score feature is imputed with that view's minimum observed validation score, while its presence, rank, and collision features are zero. The class-balanced model is fit on validation candidates with selected hard negatives. It estimates how much additional performance is available from validation-supervised fusion; because it introduces learned parameters and a separate reranking stage, we treat it as an upper bound rather than as the main Multi-DocID method.
+
+\subsection{Computational Characteristics}
+\label{sec:complexity}
+
+Multi-DocID retains one T5 parameter set and one tokenizer, but performs $V=3$ constrained decodes. With beam size $B$ per view and fixed three-token routes, it returns at most $VB$ route hypotheses before posting-list expansion. Trie traversal and posting expansion are view-specific, after which scoring is document-level. We report the three-decode latency and compute explicitly. To distinguish route diversity from search-width effects, our controlled comparison increases the beam of a single view to approximately match the total number of returned routes; it is a search-budget control rather than a claim of equal wall-clock latency.
