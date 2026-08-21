@@ -78,7 +78,7 @@ The routes have a global level-specific token namespace:
 \end{align}
 Here the placeholder $z$ is replaced by the selected code index. Thus, codes with the same index at different RQ levels remain distinct tokens. We add all $LK$ route tokens and three view markers $\langle\mathrm{view}_v\rangle$ to the T5 vocabulary and require each to be atomic under tokenization.
 
-The split deliberately exposes different stages of the residual hierarchy. The first route contains the largest coarse reconstruction terms, whereas the later routes encode progressively finer residual corrections. Consequently, the routes need not have equal standalone semantic fidelity. Our hypothesis is instead operational: their different collision patterns and query-conditioned decoding errors can provide complementary retrieval paths.
+The split exposes earlier, middle, and later stages of the residual chain: each later stage quantizes what remains after the preceding codewords have been subtracted. The quantizer does not, however, impose monotonic codeword magnitudes or guarantee a coarse-to-fine semantic hierarchy across these slices. Our hypothesis is operational: their different collision patterns and query-conditioned decoding errors can provide complementary retrieval paths.
 
 \subsubsection{Collision-preserving route index}
 
@@ -86,7 +86,7 @@ A three-token route is not required to uniquely identify a document. For each vi
 \begin{equation}
     \mathcal{P}_v(r)=\{d\in\mathcal{D}:\rho_v(d)=r\}.
 \end{equation}
-This differs from appending an arbitrary uniqueness suffix, as used in some RQ-based generative recommenders~\citep{tiger2023}: a suffix removes collisions but introduces an additional token whose value may not be semantically predictable from a query. Our design preserves all colliding documents and resolves the ambiguity during document-level fusion. During training, documents that collide in a view intentionally share that view's target route; alternate routes can provide additional document-specific evidence. Each view-specific trie stores the valid three-token route language; a separate per-view posting index maps each decoded leaf route to $\mathcal{P}_v(r)$.
+This differs from appending an arbitrary uniqueness suffix, as used in some RQ-based generative recommenders~\citep{tiger2023}: a suffix removes collisions but introduces an additional token whose value may not be semantically predictable from a query. Our design preserves the ambiguity rather than dropping colliding owners. During training, documents that collide in a view intentionally share that view's target route. At inference, we allocate that route's evidence across all owners, while alternate routes may provide evidence that differentiates them. Each view-specific trie stores the valid three-token route language; a separate per-view posting index maps each decoded leaf route to $\mathcal{P}_v(r)$.
 
 \subsection{Shared-T5 Training}
 \label{sec:shared-training}
@@ -167,43 +167,43 @@ The document candidate set is the union of the returned posting lists:
 \end{equation}
 A document retrieved through multiple routes is represented once in $\mathcal{C}(q)$ while retaining all of its per-view evidence.
 
-\subsubsection{Beam-conditional route posterior}
+\subsubsection{Beam-normalized route weights}
 
 Raw sequence scores are not directly comparable across views. Our primary fusion rule first normalizes them within each returned view beam:
 \begin{equation}
-\label{eq:route-posterior}
-    \widehat{p}_{v,B}(r\mid q)
+\label{eq:route-weight}
+    \widehat{w}_{v,B}(r\mid q)
     =
     \frac{\exp s_v(r\mid q)}
          {\sum_{r'\in\mathcal{B}_v(q)}
           \exp s_v(r'\mid q)}.
 \end{equation}
-Equation~\ref{eq:route-posterior} is a truncated distribution conditioned on the top-$B$ returned routes; it is not the full posterior over the complete trie.
+Because $s_v$ is Hugging Face's length-normalized \texttt{sequences\_scores}, Equation~\ref{eq:route-weight} defines a normalized weight over the returned beams, not an exact model posterior over the trie. All valid routes have the same generated length, so the transformation is applied consistently within a view, but the weights remain conditional on the truncated returned set.
 
 We distribute each route's mass uniformly among the documents in its posting list:
 \begin{equation}
-\label{eq:view-doc-posterior}
-    \widehat{p}_{v,B}(d\mid q)
+\label{eq:view-doc-weight}
+    \widehat{w}_{v,B}(d\mid q)
     =
     \sum_{\substack{r\in\mathcal{B}_v(q):\\d\in\mathcal{P}_v(r)}}
-    \frac{\widehat{p}_{v,B}(r\mid q)}
+    \frac{\widehat{w}_{v,B}(r\mid q)}
          {|\mathcal{P}_v(r)|}.
 \end{equation}
-This realizes a simple probability model in which the route posterior is known but the owner of a colliding route is otherwise unobserved. It also prevents a large posting list from assigning the full route score to every owner.
+The uniform division is an explicit allocation assumption for otherwise indistinguishable owners; it prevents a large posting list from assigning the full route weight to every document.
 
 Finally, we average document evidence across views:
 \begin{equation}
-\label{eq:beam-posterior-fusion}
-    S_{\mathrm{BP}}(d,q)
+\label{eq:beam-weight-fusion}
+    S_{\mathrm{BW}}(d,q)
     =\frac{1}{V}\sum_{v=0}^{V-1}
-      \widehat{p}_{v,B}(d\mid q).
+      \widehat{w}_{v,B}(d\mid q).
 \end{equation}
-Documents are ranked in descending order of $S_{\mathrm{BP}}$; ties are broken by the best route rank and then the document index. This fusion is parameter-free, operates after route-to-document expansion, and assigns equal prior weight to each decoding view.
+For numerical stability, the implementation ranks by $\log S_{\mathrm{BW}}$, computed with log-sum-exp; this is ranking-equivalent to Equation~\ref{eq:beam-weight-fusion}. Ties are broken by the best route rank and then the document index. This fusion is parameter-free, operates after route-to-document expansion, and assigns equal weight to each decoding view. We use \emph{beam posterior} only as an implementation shorthand for this beam-normalized weighting rule.
 
 \subsection{Alternative Document-Level Fusion Rules}
 \label{sec:fusion-ablations}
 
-We retain three alternative families to separate candidate complementarity from the effect of score aggregation. These are baselines or upper bounds rather than the primary inference rule in Equation~\ref{eq:beam-posterior-fusion}.
+We retain three alternative families to separate candidate complementarity from the effect of score aggregation. These are diagnostic alternatives rather than the primary inference rule in Equation~\ref{eq:beam-weight-fusion}.
 
 \paragraph{Majority voting.}
 MINDER establishes the broader pattern of aggregating evidence from multiple generated identifiers~\citep{li2023minder}. As a deliberately confidence-free baseline, we rank documents by cross-view support:
@@ -214,10 +214,10 @@ MINDER establishes the broader pattern of aggregating evidence from multiple gen
         d\in\bigcup_{r\in\mathcal{B}_v(q)}\mathcal{P}_v(r)
       \right].
 \end{equation}
-Ties are resolved by the best route rank across views and then the document index. This baseline tests whether repeated retrieval alone explains the gain, but discards route confidence and collision size.
+Ties are resolved by the best route rank across views and then the document index. This provides a support-only ranking baseline that discards route-score magnitude and collision-size correction.
 
 \paragraph{Validation-calibrated score fusion.}
-For each view, we fit a temperature $T_v>0$ and bias $b_v$ on validation candidates:
+For each view, we fit a temperature $T_v>0$ and bias $b_v$ by binary cross-entropy on validation candidate--view scores with document-relevance labels:
 \begin{equation}
     g_v(s)=s/T_v+b_v.
 \end{equation}
@@ -229,8 +229,8 @@ The calibrated LogSumExp score is
 \end{equation}
 where $\mathcal{H}(d,q)$ is the set of views that retrieved $d$, and $s_v(d\mid q)$ is the best route score through which view $v$ retrieved it. Sum and max aggregation are corresponding ablations. Calibration parameters are fit only on validation data and then frozen for test evaluation.
 
-\paragraph{Lightweight learned upper bound.}
-We additionally train a linear logistic document reranker using 17 features: for each of three views, calibrated score, presence, reciprocal route rank, and $\log(1+\text{collision size})$; plus hit count, best reciprocal rank, and calibrated LSE, max, and mean. For a missing view, its calibrated-score feature is imputed with that view's minimum observed validation score, while its presence, rank, and collision features are zero. The class-balanced model is fit on validation candidates with selected hard negatives. It estimates how much additional performance is available from validation-supervised fusion; because it introduces learned parameters and a separate reranking stage, we treat it as an upper bound rather than as the main Multi-DocID method.
+\paragraph{Learned fusion diagnostic.}
+We additionally train a linear logistic document reranker using 17 features: for each of three views, calibrated score, presence, reciprocal route rank, and $\log(1+\text{collision size})$; plus hit count, best reciprocal rank, and calibrated LSE, max, and mean. For a missing view, its calibrated-score feature is imputed with that view's minimum observed validation score, while its presence, rank, and collision features are zero. The class-balanced model is fit on validation candidates with selected hard negatives. It diagnoses learnable fusion headroom but is not a mathematical upper bound; because it introduces learned parameters and a separate reranking stage, we do not treat it as the main Multi-DocID method.
 
 \subsection{Computational Characteristics}
 \label{sec:complexity}
