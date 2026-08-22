@@ -2,10 +2,24 @@ import tempfile
 from pathlib import Path
 
 from src.train import (
+    best_model_selection_kwargs,
     find_latest_checkpoint,
     route_view_index,
     validate_multi_view_training_contract,
 )
+
+
+def test_best_model_selection_can_be_disabled_for_fixed_budget_runs():
+    assert best_model_selection_kwargs({}) == {
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "eval_hits@10",
+        "greater_is_better": True,
+    }
+    assert best_model_selection_kwargs({"load_best_model_at_end": False}) == {
+        "load_best_model_at_end": False,
+        "metric_for_best_model": None,
+        "greater_is_better": None,
+    }
 
 
 def test_find_latest_checkpoint_uses_numeric_step_order():
@@ -18,21 +32,28 @@ def test_find_latest_checkpoint_uses_numeric_step_order():
         assert find_latest_checkpoint(str(root)) == str(root / "checkpoint-1000")
 
 
-def test_multi_view_training_requires_exactly_three_views():
-    validate_multi_view_training_contract(True, 3, 9)
-    for invalid_views in (1, 2, 9):
+def test_multi_view_training_requires_equal_contiguous_splits():
+    for valid_views in (1, 3, 9):
+        validate_multi_view_training_contract(True, valid_views, 9)
+    for invalid_views in (0, 2):
         try:
             validate_multi_view_training_contract(True, invalid_views, 9)
         except ValueError as error:
-            assert "exactly 3 views" in str(error)
+            assert "divisible" in str(error)
         else:
-            raise AssertionError("non-three-view training must fail")
+            raise AssertionError("non-divisor view layouts must fail")
 
 
 def test_route_view_index_enforces_global_layer_namespaces():
+    assert route_view_index(
+        "<r0_1> <r1_2> <r2_3> <r3_4> <r4_5> <r5_6> <r6_7> <r7_8> <r8_9>",
+        1,
+        9,
+    ) == 0
     assert route_view_index("<r0_1> <r1_2> <r2_3>", 3, 9) == 0
     assert route_view_index("<r3_1> <r4_2> <r5_3>", 3, 9) == 1
     assert route_view_index("<r6_1> <r7_2> <r8_3>", 3, 9) == 2
+    assert route_view_index("<r4_1>", 9, 9) == 4
     for malformed in (
         "<r0_1> <r4_2> <r2_3>",
         "<r3_1> <r4_2>",
@@ -47,9 +68,11 @@ def test_route_view_index_enforces_global_layer_namespaces():
 
 
 if __name__ == "__main__":
+    test_best_model_selection_can_be_disabled_for_fixed_budget_runs()
+    print("PASS test_best_model_selection_can_be_disabled_for_fixed_budget_runs")
     test_find_latest_checkpoint_uses_numeric_step_order()
     print("PASS test_find_latest_checkpoint_uses_numeric_step_order")
-    test_multi_view_training_requires_exactly_three_views()
-    print("PASS test_multi_view_training_requires_exactly_three_views")
+    test_multi_view_training_requires_equal_contiguous_splits()
+    print("PASS test_multi_view_training_requires_equal_contiguous_splits")
     test_route_view_index_enforces_global_layer_namespaces()
     print("PASS test_route_view_index_enforces_global_layer_namespaces")

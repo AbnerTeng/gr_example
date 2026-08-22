@@ -29,7 +29,7 @@ For a nine-level RQ identifier, the three routes are serialized as:
 <view_2> source -> <r6_x> <r7_y> <r8_z>
 ```
 
-Training, preparation, and standard evaluation require exactly three views. `--single-view` in `src.eval_multi_view_gr` is diagnostic inference only and does not change the artifact contract.
+The formal primary configuration uses exactly three views. The Semantic-ID layout ablation additionally supports equal contiguous splits whose view count divides the nine RQ levels (`1x9`, `3x3`, and `9x1`); each prepared artifact declares its own view count. `--single-view` in `src.eval_multi_view_gr` remains diagnostic inference over one view of the configured artifact.
 
 ## Pipeline
 

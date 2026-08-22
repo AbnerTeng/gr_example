@@ -1,0 +1,42 @@
+defaults:
+  - train
+  - _self_
+
+paths:
+  train_data: ${paths.root_dir}/data/gr/nq_rq9_layout_1x9_from3x3_s42/train.jsonl
+  test_data: ${paths.root_dir}/data/gr/nq_rq9_layout_1x9_from3x3_s42/validation_expanded.jsonl
+  idx_to_rqid: ${paths.root_dir}/data/gr/nq_rq9_layout_1x9_from3x3_s42/all_view_ids.json
+
+rq:
+  n_levels: 9
+  n_codes: 256
+
+multi_view:
+  enabled: true
+  n_views: 1
+
+codebook_init: ${paths.root_dir}/data/rq_runs/nq_rq9_sliced_s42/rq_codebooks.npy
+out_dir: ${paths.root_dir}/checkpoints/nq-t5-large-rq9-layout-1x9-one-source-epoch-s42
+
+data:
+  max_in_len: 512
+  max_out_len: 12
+
+training:
+  batch_size: 32
+  grad_accum: 4
+  epochs: 1
+  lr: 3e-4
+  lr_scheduler_type: cosine
+  warmup: 0.10
+  eval_strategy: "no"
+  save_strategy: steps
+  save_steps: 5000
+  save_total_limit: 2
+  load_best_model_at_end: false
+  report_to: wandb
+  logging_steps: 100
+
+wandb:
+  project: t5-gr-nq
+  run_name: nq-rq9-layout-1x9-one-source-epoch-s42

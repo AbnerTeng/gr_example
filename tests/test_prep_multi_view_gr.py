@@ -56,14 +56,22 @@ def test_validate_view_mapping_rejects_wrong_layer_namespace():
         raise AssertionError("wrong view namespace must be rejected")
 
 
-def test_validate_view_mapping_requires_exactly_three_nonempty_views():
-    for malformed in ([], [["<r0_1> <r1_2> <r2_3>"]]):
-        try:
-            validate_view_mapping(malformed, view_size=3)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("mapping must contain exactly three views")
+def test_validate_view_mapping_requires_nonempty_and_honors_expected_view_count():
+    try:
+        validate_view_mapping([], view_size=3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mapping must be nonempty")
+
+    one_view = [["<r0_1> <r1_2> <r2_3>"]]
+    assert validate_view_mapping(one_view, view_size=3, n_levels=3) == 1
+    try:
+        validate_view_mapping(one_view, view_size=3, expected_n_views=3)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("explicit three-view contract must be enforced")
 
 
 def test_validate_view_mapping_rejects_inconsistent_view_count():
@@ -206,8 +214,8 @@ if __name__ == "__main__":
     print("PASS test_build_eval_query_keeps_one_document_level_record")
     test_validate_view_mapping_rejects_wrong_layer_namespace()
     print("PASS test_validate_view_mapping_rejects_wrong_layer_namespace")
-    test_validate_view_mapping_requires_exactly_three_nonempty_views()
-    print("PASS test_validate_view_mapping_requires_exactly_three_nonempty_views")
+    test_validate_view_mapping_requires_nonempty_and_honors_expected_view_count()
+    print("PASS test_validate_view_mapping_requires_nonempty_and_honors_expected_view_count")
     test_validate_view_mapping_rejects_inconsistent_view_count()
     print("PASS test_validate_view_mapping_rejects_inconsistent_view_count")
     test_nq_adapter_uses_explicit_document_indices_for_all_sources()

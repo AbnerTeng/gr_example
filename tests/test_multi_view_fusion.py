@@ -4,6 +4,8 @@ from src.eval_multi_view_gr import build_view_tries, ranking_metrics
 from src.multi_view_fusion import (
     aggregate_document_candidates,
     build_view_posting_lists,
+    compute_view_route_log_normalizers,
+    rank_by_beam_posterior,
     rank_by_majority,
 )
 from src.multi_view_tokenizer import (
@@ -78,6 +80,22 @@ def test_majority_uses_complete_beams_not_only_top1_routes():
     assert min(candidates[2]["per_view_rank"].values()) == 2
 
 
+def test_top_k_rankings_equal_full_ranking_prefixes():
+    posting = build_view_posting_lists(_mapping())
+    beams = [
+        [{"route": "A", "score": -1.0, "rank": 1}, {"route": "B", "score": -2.0, "rank": 2}],
+        [{"route": "E", "score": -0.5, "rank": 1}, {"route": "D", "score": -1.5, "rank": 2}],
+        [{"route": "H", "score": -0.25, "rank": 1}, {"route": "I", "score": -1.25, "rank": 2}],
+    ]
+    candidates, _ = aggregate_document_candidates(beams, posting)
+    normalizers = compute_view_route_log_normalizers(beams)
+
+    assert rank_by_majority(candidates, top_k=2) == rank_by_majority(candidates)[:2]
+    assert rank_by_beam_posterior(
+        candidates, normalizers, n_views=3, top_k=2
+    ) == rank_by_beam_posterior(candidates, normalizers, n_views=3)[:2]
+
+
 def test_multi_gold_metrics_separate_hit_rate_from_recall_and_normalize_ndcg():
     metrics = ranking_metrics([1, 9, 2], {1, 2}, cutoffs=(1, 3))
     assert metrics["hit@1_doc"] == 1.0
@@ -119,6 +137,8 @@ if __name__ == "__main__":
     print("PASS test_document_union_deduplicates_and_counts_distinct_views")
     test_majority_uses_complete_beams_not_only_top1_routes()
     print("PASS test_majority_uses_complete_beams_not_only_top1_routes")
+    test_top_k_rankings_equal_full_ranking_prefixes()
+    print("PASS test_top_k_rankings_equal_full_ranking_prefixes")
     test_multi_gold_metrics_separate_hit_rate_from_recall_and_normalize_ndcg()
     print("PASS test_multi_gold_metrics_separate_hit_rate_from_recall_and_normalize_ndcg")
     test_three_tries_enforce_disjoint_view_namespaces()

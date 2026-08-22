@@ -201,14 +201,19 @@ class ConstrainedSeq2SeqTrainer(Seq2SeqTrainer):
 def validate_multi_view_training_contract(enabled, n_views, n_levels):
     if not enabled:
         return
-    if n_views != 3:
-        raise ValueError(
-            f"Multi-DocID training requires exactly 3 views; got {n_views}"
-        )
-    if n_levels % n_views != 0:
+    if n_views <= 0 or n_levels <= 0 or n_levels % n_views != 0:
         raise ValueError(
             f"n_levels={n_levels} must be divisible by n_views={n_views}"
         )
+
+
+def best_model_selection_kwargs(training_cfg):
+    load_best = bool(training_cfg.get("load_best_model_at_end", True))
+    return {
+        "load_best_model_at_end": load_best,
+        "metric_for_best_model": "eval_hits@10" if load_best else None,
+        "greater_is_better": True if load_best else None,
+    }
 
 
 def find_latest_checkpoint(out_dir: str):
@@ -340,9 +345,7 @@ def main(cfg: DictConfig) -> None:
         save_strategy=t.save_strategy,
         save_steps=t.save_steps,
         save_total_limit=t.save_total_limit,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_hits@10",
-        greater_is_better=True,
+        **best_model_selection_kwargs(t),
         logging_steps=t.logging_steps,
         report_to=t.report_to,
         run_name=cfg.wandb.run_name,

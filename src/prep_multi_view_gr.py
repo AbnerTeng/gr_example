@@ -292,17 +292,65 @@ def write_multi_view_dataset(
     return manifest
 
 
+def split_full_rqids_into_views(full_rqids, n_views: int):
+    """Split full contiguous RQ identifiers into equal contiguous views."""
+    if n_views <= 0:
+        raise ValueError("n_views must be positive")
+    if not full_rqids:
+        raise ValueError("full RQ identifier mapping is empty")
+    first_tokens = full_rqids[0].split()
+    n_levels = len(first_tokens)
+    if n_levels == 0 or n_levels % n_views != 0:
+        raise ValueError(f"{n_views} views must evenly divide {n_levels} RQ levels")
+    view_size = n_levels // n_views
+    mapping = []
+    for doc_idx, route in enumerate(full_rqids):
+        tokens = route.split()
+        actual_levels = []
+        for token in tokens:
+            match = RQ_TOKEN.fullmatch(token)
+            if match is None:
+                raise ValueError(
+                    f"document {doc_idx} has invalid full-route token {token!r}"
+                )
+            actual_levels.append(int(match.group(1)))
+        expected_levels = list(range(n_levels))
+        if actual_levels != expected_levels:
+            raise ValueError(
+                f"document {doc_idx}: expected full-route levels "
+                f"{expected_levels}, got {actual_levels}"
+            )
+        mapping.append(
+            [
+                " ".join(tokens[start : start + view_size])
+                for start in range(0, n_levels, view_size)
+            ]
+        )
+    return mapping
+
+
 def validate_view_mapping(
-    idx_to_view_ids, view_size: int = 3, expected_n_views: int = 3
+    idx_to_view_ids,
+    view_size=None,
+    expected_n_views=None,
+    n_levels=None,
 ):
-    if view_size <= 0:
-        raise ValueError("view_size must be positive")
     if not idx_to_view_ids:
         raise ValueError("view mapping is empty")
     n_views = len(idx_to_view_ids[0])
-    if n_views != expected_n_views:
+    if expected_n_views is not None and n_views != expected_n_views:
         raise ValueError(
             f"mapping has {n_views} views; expected {expected_n_views}"
+        )
+    if n_views == 0:
+        raise ValueError("document 0 has no views")
+    if view_size is None:
+        view_size = len(idx_to_view_ids[0][0].split())
+    if view_size <= 0:
+        raise ValueError("view_size must be positive")
+    if n_levels is not None and n_views * view_size != n_levels:
+        raise ValueError(
+            f"mapping shape {n_views}x{view_size} does not cover {n_levels} RQ levels"
         )
     for doc_idx, views in enumerate(idx_to_view_ids):
         if len(views) != n_views:

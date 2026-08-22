@@ -127,7 +127,10 @@ def parse_args():
     parser.add_argument(
         "--single-view",
         type=int,
-        help="Diagnostic mode: decode only this view while preserving the exact-three-view artifact contract.",
+        help=(
+            "Diagnostic mode: decode one view while preserving the configured "
+            "artifact's view mapping"
+        ),
     )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-in-len", type=int, default=512)
@@ -154,7 +157,7 @@ def main():
     if not rows:
         raise ValueError("evaluation query set is empty")
 
-    n_views = validate_view_mapping(idx_to_view_ids, view_size=3)
+    n_views = validate_view_mapping(idx_to_view_ids)
     if args.single_view is not None and not 0 <= args.single_view < n_views:
         raise ValueError(f"single-view must be in [0, {n_views})")
     active_views = (
@@ -302,10 +305,14 @@ def main():
                 active_beams, active_posting_lists
             )
             view_log_normalizers = compute_view_route_log_normalizers(active_beams)
+            ranking_limit = None if candidates_handle is not None else max(cutoffs)
             rankings = {
-                "majority": rank_by_majority(evidence),
+                "majority": rank_by_majority(evidence, top_k=ranking_limit),
                 "beam_posterior": rank_by_beam_posterior(
-                    evidence, view_log_normalizers, len(active_views)
+                    evidence,
+                    view_log_normalizers,
+                    len(active_views),
+                    top_k=ranking_limit,
                 ),
             }
             if calibration is not None:

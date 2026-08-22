@@ -1,5 +1,6 @@
 """Document-level evidence aggregation for shared-T5 Multi-DocID GR."""
 
+import heapq
 import math
 from collections import defaultdict
 
@@ -91,7 +92,17 @@ def compute_view_route_log_normalizers(view_beams):
     return normalizers
 
 
-def rank_by_beam_posterior(candidates, view_log_normalizers, n_views: int):
+def _ordered(items, key, top_k):
+    if top_k is None:
+        return sorted(items, key=key)
+    if top_k < 0:
+        raise ValueError("top_k must be nonnegative or None")
+    return heapq.nsmallest(top_k, items, key=key)
+
+
+def rank_by_beam_posterior(
+    candidates, view_log_normalizers, n_views: int, top_k=None
+):
     if len(view_log_normalizers) != n_views:
         raise ValueError("one route normalizer is required per view")
     ranked = []
@@ -108,14 +119,16 @@ def rank_by_beam_posterior(candidates, view_log_normalizers, n_views: int):
         score = _logsumexp(evidence) - math.log(float(n_views))
         best_rank = min(int(rank) for rank in candidate["per_view_rank"].values())
         ranked.append((doc_idx, score, best_rank))
-    ranked.sort(key=lambda item: (-item[1], item[2], item[0]))
+    ranked = _ordered(
+        ranked, key=lambda item: (-item[1], item[2], item[0]), top_k=top_k
+    )
     return [doc_idx for doc_idx, _, _ in ranked]
 
 
-def rank_by_majority(candidates):
+def rank_by_majority(candidates, top_k=None):
     def key(doc_idx):
         evidence = candidates[doc_idx]
         best_rank = min(evidence["per_view_rank"].values())
         return (-evidence["hit_count"], best_rank, doc_idx)
 
-    return sorted(candidates, key=key)
+    return _ordered(candidates, key=key, top_k=top_k)
