@@ -17,6 +17,8 @@ dependencies = [
     "numpy",
     "accelerate>=1.1.0",
     "matplotlib>=3.10.9",
+    "bm25s>=0.3.9",
+    "PyStemmer>=3.0.0",
 ]
 
 [tool.setuptools.packages.find]
